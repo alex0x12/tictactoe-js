@@ -1,24 +1,37 @@
 import { EMPTY, X, O, rowOf, colOf } from './board.js'
 import { currentPlayer } from './game.js'
 
-// Обозначения сторон и буквы столбцов для координат вида «C3»
+// GLYPH говорит, каким символом рисовать значение клетки: 1 это крестик, 2 это нолик.
+// COLUMNS это буквы столбцов для подписей вида "C3". Больше пятнадцати столбцов не бывает,
+// потому что N ограничено пятнадцатью.
 const GLYPH = { [X]: '✕', [O]: '○' }
 const COLUMNS = 'ABCDEFGHIJKLMNO'
 
-// Индекс клетки → координата «C3» (буква столбца + номер строки)
+// coord(i, N) превращает индекс клетки в координату вида "C3". Нужна только для aria-label,
+// чтобы скринридер читал позицию, а не "клетка 7". Строку и столбец берём из board.js,
+// чтобы не повторять арифметику индексов.
 function coord(i, N) {
   return COLUMNS[colOf(i, N)] + (rowOf(i, N) + 1)
 }
 
+// cellLabel(state, i) собирает aria-label для одной клетки, например "C3, пусто".
+// value это значение из state.cells. Клетки и есть единственный источник истины,
+// DOM тут только читается и правил не решает.
 function cellLabel(state, i) {
   const value = state.cells[i]
   const what = value === EMPTY ? 'пусто' : value === X ? 'крестик' : 'нолик'
   return `${coord(i, state.N)}, ${what}`
 }
 
-// Полная перерисовка поля. Клетки создаются один раз — при смене размера,
-// дальше обновляется только их содержимое (иначе терялся бы фокус).
+// renderBoard(state, root) приводит содержимое поля в соответствие с состоянием партии.
+// Зовётся после каждого хода и при смене размера, ничего не возвращает.
+// cells это фрагмент с новыми клетками, он создаётся только когда число клеток в DOM
+// разошлось с N * N, то есть при смене размера. В остальных случаях клетки переиспользуются,
+// иначе после каждой перерисовки слетал бы фокус.
+// win это индексы победной цепочки, у идущей партии он пустой.
+// cursor это индекс клетки под курсором, ровно она получает tabindex="0".
 function renderBoard(state, root) {
+  // N живёт в CSS-переменной, от неё зависит grid-template-columns в style.css
   root.style.setProperty('--n', state.N)
   root.setAttribute('aria-label', `Игровое поле ${state.N} на ${state.N}`)
 
@@ -44,15 +57,21 @@ function renderBoard(state, root) {
     cell.textContent = value === EMPTY ? '' : GLYPH[value]
     cell.setAttribute('aria-label', cellLabel(state, i))
 
-    // roving tabindex: в порядке табуляции участвует только клетка под курсором
+    // в порядке табуляции участвует только клетка под курсором (roving tabindex)
     cell.tabIndex = i === cursor ? 0 : -1
     cell.classList.toggle('win', win.includes(i))
   }
 
+  // класс висит на поле, а не на клетках: по нему CSS гасит всё, кроме победной линии
   root.classList.toggle('finished', state.outcome !== null)
 }
 
-// Статус-панель: чей ход, счётчик ходов и доступность кнопок
+// renderStatus(state, panel) обновляет правую панель: чей ход или чем кончилась партия,
+// сколько сделано ходов и какие кнопки доступны. Ничего не возвращает и новый HTML
+// не строит, а меняет текст и атрибуты уже существующих элементов, иначе после каждой
+// перерисовки терялись бы обработчики кнопок.
+// turn, moves, undoButton, redoButton и resignButton это найденные внутри panel элементы.
+// p это сторона, которая сделала бы следующий ход, считается по длине history.
 function renderStatus(state, panel) {
   const turn = panel.querySelector('.turn')
   const moves = panel.querySelector('.moves')
@@ -60,7 +79,7 @@ function renderStatus(state, panel) {
   const redoButton = panel.querySelector('.btn-redo')
   const resignButton = panel.querySelector('.btn-resign')
 
-  // currentPlayer после победного хода — это уже проигравший, поэтому победитель 3 - p
+  // после победного хода currentPlayer это уже проигравший, значит победитель это 3 - p
   const p = currentPlayer(state)
 
   if (state.outcome === null) {
@@ -77,12 +96,16 @@ function renderStatus(state, panel) {
     moves.textContent = `Сделано ходов: ${state.history.length}`
   }
 
+  // undo доступен, пока есть что снимать. redo только когда в стеке есть ходы и партия
+  // не закончена, потому что game.js не даёт вернуть ход в законченную партию
   undoButton.disabled = state.history.length === 0
   redoButton.disabled = state.redo.length === 0 || state.outcome !== null
   resignButton.disabled = state.outcome !== null
 }
 
-// Курсор клавиатуры — единственная клетка с tabindex="0"
+// setCursor(root, i) делает клетку i курсором клавиатуры и ставит на неё фокус.
+// Работает по тому же принципу roving tabindex: tabindex="0" ровно у одной клетки,
+// у остальных "-1". Зовётся при движении стрелками и hjkl и при старте новой партии.
 function setCursor(root, i) {
   for (const cell of root.children) cell.tabIndex = -1
 
