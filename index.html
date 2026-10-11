@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Крестики-нолики N×N</title>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Крестики-нолики</h1>
+  </header>
+
+  <main class="layout">
+    <!-- Слева: параметры партии -->
+    <section class="panel params" aria-label="Параметры партии">
+      <h2>Параметры</h2>
+
+      <label for="size">Размер поля N: <output id="size-value">3</output></label>
+      <input type="range" id="size" min="3" max="15" step="1" value="3">
+
+      <label for="win">Цепочка K: <output id="win-value">3</output></label>
+      <input type="range" id="win" min="3" max="3" step="1" value="3">
+
+      <fieldset>
+        <legend>Режим</legend>
+        <label><input type="radio" name="mode" value="pvp" checked> Два игрока</label>
+        <label><input type="radio" name="mode" value="ai" disabled> Против ИИ (позже)</label>
+      </fieldset>
+    </section>
+
+    <!-- В центре: поле -->
+    <section class="board-area">
+      <div id="board" class="board" role="grid" aria-label="Игровое поле"></div>
+    </section>
+
+    <!-- Справа: статус и управление -->
+    <aside id="status" class="panel status" aria-label="Статус партии">
+      <h2>Статус</h2>
+      <p class="turn">Ход: ✕</p>
+      <p class="moves">Сделано ходов: 0</p>
+
+      <div class="controls">
+        <button type="button" class="btn-undo">⟲ Отменить ход</button>
+        <button type="button" class="btn-redo">⟳ Вернуть</button>
+        <button type="button" class="btn-new">⏻ Новая партия</button>
+        <button type="button" class="btn-resign">⚑ Сдаться</button>
+      </div>
+    </aside>
+  </main>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
