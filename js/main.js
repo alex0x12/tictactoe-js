@@ -1,9 +1,11 @@
-import { rowOf, colOf } from './board.js'
-import { createGame, isLegal, applyMove, undo, redo, resign } from './game.js'
+import { rowOf, colOf, opponent } from './board.js'
+import { createGame, currentPlayer, isLegal, applyMove, undo, redo, resign } from './game.js'
 import { renderBoard, renderStatus, setCursor } from './ui.js'
+import { loadSettings, saveSettings, loadGame, saveGame, recordResult } from './storage.js'
 
-// main.js это точка входа. Тут сходятся модель партии из game.js, отрисовка из ui.js
-// и обработчики ввода. Больше состояние партии нигде не хранится.
+// main.js это точка входа. Тут сходятся модель партии из game.js, отрисовка из ui.js,
+// сохранение из storage.js и обработчики ввода. В памяти состояние партии живёт только
+// здесь, в localStorage лежит его копия.
 
 // Ссылки на элементы страницы ищем один раз при загрузке модуля.
 // boardElement это поле, statusElement правая панель, дальше ползунки и их подписи.
@@ -36,30 +38,67 @@ function createNewGame() {
 }
 
 // draw() перерисовывает всё, что зависит от состояния: поле и панель статуса.
-// Отдельная функция, чтобы после каждого изменения не забыть вторую половину.
+// Напрямую её зовёт только afterChange.
 function draw() {
   renderBoard(state, boardElement)
   renderStatus(state, statusElement)
 }
 
-// startGame() создаёт партию, показывает её и ставит курсор в первую клетку.
-// Зовётся при загрузке страницы и по кнопке "Новая партия".
+// humanResult(state) переводит исход законченной партии в результат со стороны человека:
+// 'w' победа, 'd' ничья, 'l' поражение. Нужна только для статистики.
+// Сдача всегда поражение, потому что сдаётся только человек, ИИ не сдаётся.
+// winner это сторона, сделавшая победный ход: после него currentPlayer уже указывает
+// на проигравшего, поэтому победитель это его соперник.
+function humanResult(state) {
+  if (state.outcome === 'draw') return 'd'
+  if (state.outcome === 'resign') return 'l'
+  const winner = opponent(currentPlayer(state))
+  return winner === state.humanSide ? 'w' : 'l'
+}
+
+// afterChange() завершает любое изменение партии: ход, отмену, возврат, сдачу, новую партию.
+// Если партия только что закончилась, один раз пишет результат в статистику, потом
+// сохраняет партию и перерисовывает экран. Сохраняем после каждого полухода, иначе F5
+// между ходом человека и ответом ИИ потеряет ход человека.
+// Флаг counted лежит в самой партии и сохраняется вместе с ней. Будь он обычной переменной,
+// F5 сбросил бы его, и одну партию можно было бы посчитать дважды. undo его не сбрасывает:
+// партия, доигранная заново с середины, та же самая.
+// Всё синхронно, поэтому клик не может вклиниться между ходом и перерисовкой.
+function afterChange() {
+  if (state.outcome !== null && !state.counted) {
+    recordResult(state, humanResult(state))
+    state.counted = true
+  }
+  saveGame(state)
+  draw()
+}
+
+// startGame() создаёт партию по ползункам, запоминает её параметры как настройки,
+// сохраняет, показывает и ставит курсор в первую клетку. afterChange сразу затирает
+// старую запись в хранилище, иначе после "Новой партии" и F5 вернулась бы прежняя.
+// Зовётся по кнопке "Новая партия", при смене N или K и при загрузке страницы,
+// если сохранённой партии нет. debug пока всегда false, галочки ещё нет.
 function startGame() {
   state = createNewGame()
-  draw()
+  saveSettings({
+    N: state.N, K: state.K, mode: state.mode, difficulty: state.difficulty,
+    humanFirst: state.humanSide === state.first, debug: false,
+  })
+  afterChange()
   setCursor(boardElement, state.cursor)
 }
 
 // play(i) обрабатывает ход в клетку i, это общий вход для мыши и клавиатуры.
-// Порядок обязателен и синхронен: проверить легальность, применить ход и перерисовать,
-// без setTimeout и requestAnimationFrame между шагами. Легальность берём из state.cells
+// Порядок обязателен и синхронен: проверить легальность, применить ход, сохранить
+// и перерисовать (последние два шага делает afterChange), без setTimeout
+// и requestAnimationFrame между шагами. Легальность берём из state.cells
 // через isLegal, а не из DOM. Иначе клик по клетке, которая в модели уже занята, но на
 // экране ещё пустая, поставил бы второй камень поверх чужого.
 function play(i) {
   if (!isLegal(state, i)) return
   applyMove(state, i)
   state.cursor = i
-  draw()
+  afterChange()
 }
 
 // --- мышь ---
@@ -113,35 +152,46 @@ boardElement.addEventListener('keydown', (event) => {
 // --- кнопки ---
 
 // Отмена и возврат. game.js сам решает, что снять (в pvp это один полуход), и сам
-// следит за стеком redo, тут только вызов и перерисовка.
+// следит за стеком redo, тут только вызов и afterChange.
 document.querySelector('.btn-undo').addEventListener('click', () => {
   undo(state)
-  draw()
+  afterChange()
 })
 
 document.querySelector('.btn-redo').addEventListener('click', () => {
   redo(state)
-  draw()
+  afterChange()
 })
 
 document.querySelector('.btn-new').addEventListener('click', startGame)
 
 document.querySelector('.btn-resign').addEventListener('click', () => {
   resign(state)
-  draw()
+  afterChange()
 })
 
 // --- параметры: любое изменение N или K начинает новую партию ---
 
 // refreshOutputs() синхронизирует подписи и границы ползунков. K не может быть больше N,
 // поэтому верхняя граница ползунка K следует за N, а слишком большое K подрезается.
-// Зовётся на каждый сдвиг ползунка и при отказе от новой партии, чтобы вернуть ползунки
-// к параметрам текущей.
+// Зовётся на каждый сдвиг ползунка и из showParams.
 function refreshOutputs() {
   winInput.max = sizeInput.value
   if (Number(winInput.value) > Number(sizeInput.value)) winInput.value = sizeInput.value
   sizeValue.value = sizeInput.value
   winValue.value = winInput.value
+}
+
+// showParams(N, K) ставит ползунки на N и K и обновляет подписи. Зовётся при восстановлении
+// партии после F5 и при отказе от новой партии, чтобы вернуть ползунки к текущей.
+// Сначала поднимаем winInput.max, потом задаём K: ползунок молча обрезает значение больше
+// своего max и не возвращает его, когда max потом растёт. Если задать K раньше, партия
+// с K = 6 показала бы на ползунке 3, потому что в index.html стоит max="3".
+function showParams(N, K) {
+  sizeInput.value = N
+  winInput.max = N
+  winInput.value = K
+  refreshOutputs()
 }
 
 sizeInput.addEventListener('input', refreshOutputs)
@@ -153,9 +203,7 @@ winInput.addEventListener('input', refreshOutputs)
 // к значениям текущей партии.
 function applySettings() {
   if (state.history.length > 0 && !confirm('Начать новую партию с новыми настройками?')) {
-    sizeInput.value = state.N
-    winInput.value = state.K
-    refreshOutputs()
+    showParams(state.N, state.K)
     return
   }
   startGame()
@@ -165,6 +213,30 @@ function applySettings() {
 sizeInput.addEventListener('change', applySettings)
 winInput.addEventListener('change', applySettings)
 
-// старт: показать подписи и запустить первую партию
-refreshOutputs()
-startGame()
+// restoreOrStart() запускается один раз при загрузке страницы. Если в хранилище есть годная
+// партия, продолжает её: ползунки ставит на её N и K, курсор на последний ход (cursor
+// не сохраняется). afterChange сразу перезаписывает запись уже проверенной, так что мусор,
+// обрезанный при проверке, из хранилища пропадает. Законченная партия блокируется сама,
+// потому что isLegal не пропускает ходы, пока outcome не null.
+// Если партии нет, начинает новую, а ползунки ставит по сохранённым настройкам.
+// saved это партия из хранилища или null, settings это настройки или null.
+function restoreOrStart() {
+  const saved = loadGame()
+
+  if (saved === null) {
+    const settings = loadSettings()
+    if (settings) showParams(settings.N, settings.K)
+    else refreshOutputs()
+    startGame()
+    return
+  }
+
+  state = saved
+  state.cursor = state.history.at(-1) ?? 0
+  showParams(state.N, state.K)
+  afterChange()
+  setCursor(boardElement, state.cursor)
+  // задача 8: если партия не закончена и ходит ИИ, здесь надо запустить поиск
+}
+
+restoreOrStart()
