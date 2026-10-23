@@ -236,7 +236,6 @@ function restoreOrStart() {
   showParams(state.N, state.K)
   afterChange()
   setCursor(boardElement, state.cursor)
-  // задача 8: если партия не закончена и ходит ИИ, здесь надо запустить поиск
 }
 
 restoreOrStart()
