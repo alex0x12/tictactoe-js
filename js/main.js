@@ -1,47 +1,80 @@
 import { rowOf, colOf, opponent } from './board.js'
 import { createGame, currentPlayer, isLegal, applyMove, undo, redo, resign } from './game.js'
-import { renderBoard, renderStatus, setCursor } from './ui.js'
-import { loadSettings, saveSettings, loadGame, saveGame, recordResult } from './storage.js'
+import { renderBoard, renderStatus, renderScore, setCursor } from './ui.js'
+import {
+  loadSettings, saveSettings, loadGame, saveGame, loadStats, statsKey, recordResult,
+} from './storage.js'
+import { chooseMove } from './ai.js'
 
 // main.js это точка входа. Тут сходятся модель партии из game.js, отрисовка из ui.js,
-// сохранение из storage.js и обработчики ввода. В памяти состояние партии живёт только
-// здесь, в localStorage лежит его копия.
+// сохранение из storage.js, ход ИИ из ai.js и обработчики ввода. В памяти состояние
+// партии живёт только здесь, в localStorage лежит его копия.
 
 // Ссылки на элементы страницы ищем один раз при загрузке модуля.
 // boardElement это поле, statusElement правая панель, дальше ползунки и их подписи.
+// aiOptions это группы "Сложность" и "Кто ходит первым", они нужны только против ИИ.
 const boardElement = document.getElementById('board')
 const statusElement = document.getElementById('status')
 const sizeInput = document.getElementById('size')
 const sizeValue = document.getElementById('size-value')
 const winInput = document.getElementById('win')
 const winValue = document.getElementById('win-value')
+const aiOptions = document.querySelectorAll('.ai-only')
 
 // state это текущая партия, объект GameState из game.js. Единственный источник истины,
 // DOM только отражает его и правил не решает.
 let state
 
-// createNewGame() собирает новую партию по текущим значениям ползунков.
-// N и K читаются из DOM один раз при создании, дальше партия живёт со своими значениями,
-// и смена ползунка её уже не касается. Поле cursor добавляется здесь, потому что в
-// createGame его нет, а renderBoard его читает.
-function createNewGame() {
-  const game = createGame({
+// checkedValue(name) возвращает value выбранной радиокнопки из группы name.
+function checkedValue(name) {
+  return document.querySelector(`input[name="${name}"]:checked`).value
+}
+
+// setChecked(name, value) выбирает в группе name радиокнопку со значением value.
+function setChecked(name, value) {
+  document.querySelector(`input[name="${name}"][value="${value}"]`).checked = true
+}
+
+// readSettings() читает с левой панели все параметры новой партии.
+function readSettings() {
+  return {
     N: Number(sizeInput.value),
     K: Number(winInput.value),
-    mode: 'pvp',
-    difficulty: 'medium',
-    humanFirst: true,
-    seed: Date.now() >>> 0,
-  })
+    mode: checkedValue('mode'),
+    difficulty: checkedValue('difficulty'),
+    humanFirst: checkedValue('first') === 'human',
+  }
+}
+
+// settingsOf(game) достаёт те же параметры из партии. Нужна, чтобы вернуть к ним панель
+// после F5 или после отказа от новой партии, и чтобы сохранить их как настройки.
+function settingsOf(game) {
+  return {
+    N: game.N,
+    K: game.K,
+    mode: game.mode,
+    difficulty: game.difficulty,
+    humanFirst: game.humanSide === game.first,
+  }
+}
+
+// createNewGame() собирает новую партию по текущим значениям на панели.
+// Параметры читаются из DOM один раз при создании, дальше партия живёт со своими, и смена
+// ползунка или радиокнопки её уже не касается. Поле cursor добавляется здесь, потому что
+// в createGame его нет, а renderBoard его читает.
+function createNewGame() {
+  const game = createGame({ ...readSettings(), seed: Date.now() >>> 0 })
   game.cursor = 0
   return game
 }
 
-// draw() перерисовывает всё, что зависит от состояния: поле и панель статуса.
-// Напрямую её зовёт только afterChange.
+// draw() перерисовывает всё, что зависит от состояния: поле, панель статуса и счёт.
+// Напрямую её зовёт только afterChange. Счёт читается из хранилища при каждой
+// перерисовке, это дёшево, а результат только что законченной партии уже записан.
 function draw() {
   renderBoard(state, boardElement)
   renderStatus(state, statusElement)
+  renderScore(state, loadStats().items[statsKey(state)], statusElement)
 }
 
 // humanResult(state) переводит исход законченной партии в результат со стороны человека:
@@ -76,16 +109,41 @@ function afterChange() {
 // startGame() создаёт партию по ползункам, запоминает её параметры как настройки,
 // сохраняет, показывает и ставит курсор в первую клетку. afterChange сразу затирает
 // старую запись в хранилище, иначе после "Новой партии" и F5 вернулась бы прежняя.
-// Зовётся по кнопке "Новая партия", при смене N или K и при загрузке страницы,
-// если сохранённой партии нет. debug пока всегда false, галочки ещё нет.
+// Зовётся по кнопке "Новая партия", при смене параметров и при загрузке страницы,
+// если сохранённой партии нет. Если первым ходит ИИ, в конце запрашиваем его ход.
+// debug всегда false: отладочной панели в упрощённой версии нет.
 function startGame() {
   state = createNewGame()
-  saveSettings({
-    N: state.N, K: state.K, mode: state.mode, difficulty: state.difficulty,
-    humanFirst: state.humanSide === state.first, debug: false,
-  })
+  saveSettings({ ...settingsOf(state), debug: false })
   afterChange()
   setCursor(boardElement, state.cursor)
+  requestAiMove()
+}
+
+// isAiTurn() говорит, должен ли сейчас ходить ИИ: партия против ИИ, она не закончена,
+// и очередь не человека.
+function isAiTurn() {
+  return state.mode === 'ai' && state.outcome === null && currentPlayer(state) !== state.humanSide
+}
+
+// requestAiMove() откладывает ход ИИ до следующей перерисовки. Поиск занимает до секунды,
+// и всё это время страница стоит. Если считать сразу, браузер не успеет нарисовать ход
+// человека, и оба камня появятся разом. requestAnimationFrame зовёт функцию прямо перед
+// отрисовкой, а setTimeout внутри него переносит счёт на момент после неё.
+function requestAiMove() {
+  if (isAiTurn()) requestAnimationFrame(() => setTimeout(makeAiMove))
+}
+
+// makeAiMove() считает и делает ход ИИ. Сначала ещё раз проверяет, что ход за ИИ: пока
+// ждали отрисовку, могли нажать отмену или начать новую партию. Ход применяется
+// и рисуется в одном такте, как и ход человека.
+// result это ответ поиска, его итог пишем в консоль: видно глубину, число узлов и время.
+function makeAiMove() {
+  if (!isAiTurn()) return
+  const result = chooseMove(state.cells, state.N, state.K, currentPlayer(state), state.difficulty)
+  console.log('ИИ: ход', result.move, 'глубина', result.depth, 'узлов', result.nodes, result.ms, 'мс')
+  applyMove(state, result.move)
+  afterChange()
 }
 
 // play(i) обрабатывает ход в клетку i, это общий вход для мыши и клавиатуры.
@@ -94,11 +152,13 @@ function startGame() {
 // и requestAnimationFrame между шагами. Легальность берём из state.cells
 // через isLegal, а не из DOM. Иначе клик по клетке, которая в модели уже занята, но на
 // экране ещё пустая, поставил бы второй камень поверх чужого.
+// Пока ходит ИИ, клики игнорируются. После хода человека запрашиваем ответ ИИ.
 function play(i) {
-  if (!isLegal(state, i)) return
+  if (isAiTurn() || !isLegal(state, i)) return
   applyMove(state, i)
   state.cursor = i
   afterChange()
+  requestAiMove()
 }
 
 // --- мышь ---
@@ -151,16 +211,22 @@ boardElement.addEventListener('keydown', (event) => {
 
 // --- кнопки ---
 
-// Отмена и возврат. game.js сам решает, что снять (в pvp это один полуход), и сам
-// следит за стеком redo, тут только вызов и afterChange.
+// Отмена и возврат. game.js сам решает, что снять (в pvp один полуход, против ИИ обычно
+// пару), и сам следит за стеком redo. После отмены ход может оказаться за ИИ, например
+// если он ходил первым и отменили всё, поэтому запрашиваем его ход.
 document.querySelector('.btn-undo').addEventListener('click', () => {
   undo(state)
   afterChange()
+  requestAiMove()
 })
 
+// Против ИИ отмена снимает пару ходов, поэтому возврат тоже возвращает пару: свой ход
+// и сохранённый ответ ИИ. Если ответа в стеке нет, ИИ посчитает его заново.
 document.querySelector('.btn-redo').addEventListener('click', () => {
   redo(state)
+  if (isAiTurn() && state.redo.length > 0) redo(state)
   afterChange()
+  requestAiMove()
 })
 
 document.querySelector('.btn-new').addEventListener('click', startGame)
@@ -170,40 +236,45 @@ document.querySelector('.btn-resign').addEventListener('click', () => {
   afterChange()
 })
 
-// --- параметры: любое изменение N или K начинает новую партию ---
+// --- параметры: любое изменение начинает новую партию ---
 
-// refreshOutputs() синхронизирует подписи и границы ползунков. K не может быть больше N,
-// поэтому верхняя граница ползунка K следует за N, а слишком большое K подрезается.
-// Зовётся на каждый сдвиг ползунка и из showParams.
+// refreshOutputs() синхронизирует подписи и границы ползунков и доступность настроек ИИ.
+// K не может быть больше N, поэтому верхняя граница ползунка K следует за N, а слишком
+// большое K подрезается. Группы "Сложность" и "Кто ходит первым" выключаются в режиме
+// "два игрока". Зовётся на каждый сдвиг ползунка, при смене радиокнопки и из showSettings.
 function refreshOutputs() {
   winInput.max = sizeInput.value
   if (Number(winInput.value) > Number(sizeInput.value)) winInput.value = sizeInput.value
   sizeValue.value = sizeInput.value
   winValue.value = winInput.value
+  for (const group of aiOptions) group.disabled = checkedValue('mode') !== 'ai'
 }
 
-// showParams(N, K) ставит ползунки на N и K и обновляет подписи. Зовётся при восстановлении
-// партии после F5 и при отказе от новой партии, чтобы вернуть ползунки к текущей.
+// showSettings(s) ставит панель на параметры s: ползунки, режим, сложность, кто первый.
+// Зовётся при восстановлении партии после F5 и при отказе от новой партии.
 // Сначала поднимаем winInput.max, потом задаём K: ползунок молча обрезает значение больше
 // своего max и не возвращает его, когда max потом растёт. Если задать K раньше, партия
 // с K = 6 показала бы на ползунке 3, потому что в index.html стоит max="3".
-function showParams(N, K) {
-  sizeInput.value = N
-  winInput.max = N
-  winInput.value = K
+function showSettings(s) {
+  sizeInput.value = s.N
+  winInput.max = s.N
+  winInput.value = s.K
+  setChecked('mode', s.mode)
+  setChecked('difficulty', s.difficulty)
+  setChecked('first', s.humanFirst ? 'human' : 'ai')
   refreshOutputs()
 }
 
 sizeInput.addEventListener('input', refreshOutputs)
 winInput.addEventListener('input', refreshOutputs)
 
-// applySettings() применяет новые N и K. К идущей партии их применить нельзя, индексы
-// в history посчитаны по старому N. Поэтому любое изменение начинает новую партию,
-// а если ходы уже сделаны, сначала спрашиваем. При отказе ползунки возвращаются
-// к значениям текущей партии.
+// applySettings() применяет новые параметры. К идущей партии их применить нельзя: индексы
+// в history посчитаны по старому N, а режим и сложность фиксируются на старте партии.
+// Поэтому любое изменение начинает новую партию, а если ходы уже сделаны, сначала
+// спрашиваем. При отказе панель возвращается к параметрам текущей партии.
 function applySettings() {
   if (state.history.length > 0 && !confirm('Начать новую партию с новыми настройками?')) {
-    showParams(state.N, state.K)
+    showSettings(settingsOf(state))
     return
   }
   startGame()
@@ -213,19 +284,29 @@ function applySettings() {
 sizeInput.addEventListener('change', applySettings)
 winInput.addEventListener('change', applySettings)
 
+// у радиокнопки change срабатывает при выборе. refreshOutputs сразу включает или
+// выключает настройки ИИ, ещё до вопроса о новой партии
+for (const radio of document.querySelectorAll('.params input[type="radio"]')) {
+  radio.addEventListener('change', () => {
+    refreshOutputs()
+    applySettings()
+  })
+}
+
 // restoreOrStart() запускается один раз при загрузке страницы. Если в хранилище есть годная
-// партия, продолжает её: ползунки ставит на её N и K, курсор на последний ход (cursor
+// партия, продолжает её: панель ставит на её параметры, курсор на последний ход (cursor
 // не сохраняется). afterChange сразу перезаписывает запись уже проверенной, так что мусор,
 // обрезанный при проверке, из хранилища пропадает. Законченная партия блокируется сама,
 // потому что isLegal не пропускает ходы, пока outcome не null.
-// Если партии нет, начинает новую, а ползунки ставит по сохранённым настройкам.
+// Если перезагрузили страницу, пока ИИ считал, ход за ним: запрашиваем его ход заново.
+// Если партии нет, начинает новую, а панель ставит по сохранённым настройкам.
 // saved это партия из хранилища или null, settings это настройки или null.
 function restoreOrStart() {
   const saved = loadGame()
 
   if (saved === null) {
     const settings = loadSettings()
-    if (settings) showParams(settings.N, settings.K)
+    if (settings) showSettings(settings)
     else refreshOutputs()
     startGame()
     return
@@ -233,9 +314,10 @@ function restoreOrStart() {
 
   state = saved
   state.cursor = state.history.at(-1) ?? 0
-  showParams(state.N, state.K)
+  showSettings(settingsOf(state))
   afterChange()
   setCursor(boardElement, state.cursor)
+  requestAiMove()
 }
 
 restoreOrStart()

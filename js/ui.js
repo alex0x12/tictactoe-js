@@ -7,6 +7,9 @@ import { currentPlayer } from './game.js'
 const GLYPH = { [X]: '✕', [O]: '○' }
 const COLUMNS = 'ABCDEFGHIJKLMNO'
 
+// LEVEL_NAMES это названия уровней сложности для строки счёта
+const LEVEL_NAMES = { easy: 'лёгкий', medium: 'средний', hard: 'сложный' }
+
 // coord(i, N) превращает индекс клетки в координату вида "C3". Нужна только для aria-label,
 // чтобы скринридер читал позицию, а не "клетка 7". Строку и столбец берём из board.js,
 // чтобы не повторять арифметику индексов.
@@ -30,6 +33,7 @@ function cellLabel(state, i) {
 // иначе после каждой перерисовки слетал бы фокус.
 // win это индексы победной цепочки, у идущей партии он пустой.
 // cursor это индекс клетки под курсором, ровно она получает tabindex="0".
+// last это индекс последнего хода, его клетка подсвечивается, чтобы было видно ход ИИ.
 function renderBoard(state, root) {
   // N живёт в CSS-переменной, от неё зависит grid-template-columns в style.css
   root.style.setProperty('--n', state.N)
@@ -49,6 +53,7 @@ function renderBoard(state, root) {
 
   const win = state.winLine ?? []
   const cursor = state.cursor ?? 0
+  const last = state.history.at(-1)
 
   for (let i = 0; i < state.cells.length; i++) {
     const cell = root.children[i]
@@ -60,6 +65,7 @@ function renderBoard(state, root) {
     // в порядке табуляции участвует только клетка под курсором (roving tabindex)
     cell.tabIndex = i === cursor ? 0 : -1
     cell.classList.toggle('win', win.includes(i))
+    cell.classList.toggle('last', i === last)
   }
 
   // класс висит на поле, а не на клетках: по нему CSS гасит всё, кроме победной линии
@@ -72,6 +78,7 @@ function renderBoard(state, root) {
 // перерисовки терялись бы обработчики кнопок.
 // turn, moves, undoButton, redoButton и resignButton это найденные внутри panel элементы.
 // p это сторона, которая сделала бы следующий ход, считается по длине history.
+// ai говорит, что партия идёт против ИИ: тогда вместо значка пишем "вы" или "ИИ".
 function renderStatus(state, panel) {
   const turn = panel.querySelector('.turn')
   const moves = panel.querySelector('.moves')
@@ -81,18 +88,24 @@ function renderStatus(state, panel) {
 
   // после победного хода currentPlayer это уже проигравший, значит победитель это 3 - p
   const p = currentPlayer(state)
+  const ai = state.mode === 'ai'
 
   if (state.outcome === null) {
-    turn.textContent = `Ход: ${GLYPH[p]}`
+    // ИИ ходит сразу, как только до него дошла очередь, поэтому его ход это "думает"
+    const who = !ai ? '' : p === state.humanSide ? ' (вы)' : ' (ИИ думает...)'
+    turn.textContent = `Ход: ${GLYPH[p]}${who}`
     moves.textContent = `Сделано ходов: ${state.history.length}`
   } else if (state.outcome === 'win') {
-    turn.textContent = `${GLYPH[3 - p]} выиграл`
+    const winner = 3 - p
+    if (!ai) turn.textContent = `${GLYPH[winner]} выиграл`
+    else turn.textContent = winner === state.humanSide ? 'Вы выиграли' : 'ИИ выиграл'
     moves.textContent = `Сделано ходов: ${state.history.length}`
   } else if (state.outcome === 'draw') {
     turn.textContent = 'Ничья'
     moves.textContent = 'Свободных клеток нет'
   } else {
-    turn.textContent = `${GLYPH[p]} сдался`
+    // против ИИ сдаться может только человек
+    turn.textContent = ai ? 'Вы сдались' : `${GLYPH[p]} сдался`
     moves.textContent = `Сделано ходов: ${state.history.length}`
   }
 
@@ -101,6 +114,25 @@ function renderStatus(state, panel) {
   undoButton.disabled = state.history.length === 0
   redoButton.disabled = state.redo.length === 0 || state.outcome !== null
   resignButton.disabled = state.outcome !== null
+}
+
+// renderScore(state, record, panel) показывает счёт против ИИ для настроек этой партии.
+// record это { w, d, l } из статистики или undefined, если на этих настройках ещё
+// не сыграно ни одной партии. В партии двух людей счёт не ведётся, строка пустая.
+// first говорит, кто ходил первым: от этого зависит, в какую строку статистики идёт партия,
+// level это название уровня сложности.
+function renderScore(state, record, panel) {
+  const score = panel.querySelector('.score')
+  if (state.mode !== 'ai') {
+    score.textContent = ''
+    return
+  }
+
+  const { w, d, l } = record ?? { w: 0, d: 0, l: 0 }
+  const first = state.humanSide === state.first ? 'вы первым' : 'ИИ первым'
+  const level = LEVEL_NAMES[state.difficulty]
+  score.textContent = `Счёт: ${state.N}x${state.N}, K=${state.K}, ${level}, ${first}\n`
+    + `победы ${w}, ничьи ${d}, поражения ${l}`
 }
 
 // setCursor(root, i) делает клетку i курсором клавиатуры и ставит на неё фокус.
@@ -116,4 +148,4 @@ function setCursor(root, i) {
   cell.focus()
 }
 
-export { renderBoard, renderStatus, setCursor }
+export { renderBoard, renderStatus, renderScore, setCursor }

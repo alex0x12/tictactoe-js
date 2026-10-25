@@ -67,6 +67,11 @@ body {
   color: #5a6478;
 }
 
+/* настройки игры против ИИ гаснут в режиме "два игрока" */
+.params fieldset:disabled {
+  opacity: 0.5;
+}
+
 .params fieldset label {
   margin: 4px 0;
   font-size: 14px;
@@ -102,6 +107,11 @@ body {
 /* по пустой клетке можно кликать, по занятой нет */
 .cell:empty {
   cursor: pointer;
+}
+
+/* последний ход, чтобы было видно, куда сходил ИИ */
+.cell.last {
+  background: #e6eeff;
 }
 
 .cell.win {
@@ -163,3 +173,13 @@ body {
   cursor: default;
   opacity: 0.6;
 }
+
+/* счёт против ИИ, две строки */
+.status .score {
+  margin: 16px 0 0;
+  font-size: 13px;
+  color: #5a6478;
+  white-space: pre-line;
+}
+/* white-space: pre-line заставляет браузер показывать \n из текста.
+Без него счёт слился бы в одну строку.*/

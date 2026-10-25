@@ -25,8 +25,22 @@
       <fieldset>
         <legend>Режим</legend>
         <label><input type="radio" name="mode" value="pvp" checked> Два игрока</label>
-        <label><input type="radio" name="mode" value="ai" disabled> Против ИИ (позже)</label>
+        <label><input type="radio" name="mode" value="ai"> Против ИИ</label>
       </fieldset>
+
+      <fieldset class="ai-only" disabled>
+        <legend>Сложность</legend>
+        <label><input type="radio" name="difficulty" value="easy"> Лёгкий</label>
+        <label><input type="radio" name="difficulty" value="medium" checked> Средний</label>
+        <label><input type="radio" name="difficulty" value="hard"> Сложный</label>
+      </fieldset>
+
+      <fieldset class="ai-only" disabled>
+        <legend>Кто ходит первым</legend>
+        <label><input type="radio" name="first" value="human" checked> Вы</label>
+        <label><input type="radio" name="first" value="ai"> ИИ</label>
+      </fieldset>
+
     </section>
 
     <!-- В центре: поле -->
@@ -46,6 +60,7 @@
         <button type="button" class="btn-new">⏻ Новая партия</button>
         <button type="button" class="btn-resign">⚑ Сдаться</button>
       </div>
+      <p class="score"></p>
     </aside>
   </main>
 
