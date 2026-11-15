@@ -100,7 +100,57 @@ function deleteToken(db, token) {
   db.prepare('DELETE FROM tokens WHERE token = ?').run(token)
 }
 
+// --- партии ---
+
+// GAME_SELECT это начало запроса, который читает партию вместе с никнеймами игроков:
+// в ответе нужны имена, а не id. JOIN берёт крестика, он есть всегда. LEFT JOIN нужен там,
+// где игрока может не быть: нолик ещё не пришёл, победителя ещё нет. x, o и w это
+// короткие имена одной и той же таблицы users, взятой три раза.
+const GAME_SELECT = `
+  SELECT games.*, x.nickname AS x_name, o.nickname AS o_name, w.nickname AS winner_name
+  FROM games
+  JOIN users x ON x.id = games.x_id
+  LEFT JOIN users o ON o.id = games.o_id
+  LEFT JOIN users w ON w.id = games.winner_id`
+
+// insertGame(db, { id, N, K, xId, invite }) записывает новую партию, в которой пока один
+// игрок, крестик xId. invite это true или false, в базе он лежит как 1 или 0.
+// Время создания ставит сервер, а не браузер.
+function insertGame(db, { id, N, K, xId, invite }) {
+  db.prepare('INSERT INTO games (id, N, K, x_id, invite, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, N, K, xId, invite ? 1 : 0, Date.now())
+}
+
+// findGame(db, id) возвращает партию вместе с x_name, o_name и winner_name
+// или undefined, если такой партии нет.
+function findGame(db, id) {
+  return db.prepare(`${GAME_SELECT} WHERE games.id = ?`).get(id)
+}
+
+// findWaitingGame(db, N, K) возвращает самую старую партию, которая ждёт соперника,
+// без приглашения и с такими же N и K, или undefined. Это строка из games без никнеймов,
+// нужен только её id. rowid решает, если две партии созданы в одну миллисекунду.
+function findWaitingGame(db, N, K) {
+  return db.prepare(`
+    SELECT * FROM games
+    WHERE o_id IS NULL AND invite = 0 AND N = ? AND K = ?
+    ORDER BY created_at, rowid
+    LIMIT 1`).get(N, K)
+}
+
+// deleteWaitingGames(db, userId) удаляет партии игрока, в которых нет соперника.
+// У игрока не больше одной такой партии, поэтому перед новой старую убирают.
+function deleteWaitingGames(db, userId) {
+  db.prepare('DELETE FROM games WHERE x_id = ? AND o_id IS NULL').run(userId)
+}
+
+// setOpponent(db, id, userId) сажает игрока userId на место нолика в партии id.
+function setOpponent(db, id, userId) {
+  db.prepare('UPDATE games SET o_id = ? WHERE id = ?').run(userId, id)
+}
+
 export {
   openDb,
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
+  insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
 }

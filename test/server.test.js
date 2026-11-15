@@ -157,3 +157,111 @@ test('без токена и с выдуманным токеном 401', async 
     assert.deepEqual(res.body, { error: 'Нужно войти' })
   }
 })
+
+// --- задача 3: новая партия, случайный соперник, приглашение, просмотр ---
+
+test('новая партия требует вход и проверяет N и K', async () => {
+  assert.equal((await call('POST', '/games', { N: 3, K: 3 })).status, 401)
+
+  const alex = await signUp('alex')
+  const bad = [{ N: 2, K: 2 }, { N: 16, K: 5 }, { N: 5, K: 6 }, { N: 5, K: 2 },
+    { N: '5', K: 3 }, { N: 3.5, K: 3 }, {}]
+  for (const body of bad) {
+    const res = await call('POST', '/games', body, alex)
+    assert.equal(res.status, 400, JSON.stringify(body))
+    assert.deepEqual(res.body, { error: 'N от 3 до 15, K от 3 до N' })
+  }
+})
+
+test('случайный соперник: второй игрок попадает в партию первого', async () => {
+  const alex = await signUp('alex')
+  const masha = await signUp('masha')
+
+  const a = await call('POST', '/games', { N: 3, K: 3 }, alex)
+  assert.equal(a.status, 201)
+  assert.match(a.body.id, /^[0-9a-f]{12}$/)
+  assert.deepEqual(a.body, {
+    id: a.body.id, N: 3, K: 3, invite: false, x: 'alex', o: null, you: 1,
+    history: [], outcome: null, winner: null,
+  })
+
+  const m = await call('POST', '/games', { N: 3, K: 3 }, masha)
+  assert.equal(m.status, 201)
+  assert.equal(m.body.id, a.body.id)
+  assert.equal(m.body.x, 'alex')
+  assert.equal(m.body.o, 'masha')
+  assert.equal(m.body.you, 2)
+})
+
+test('случайный соперник ищется только с теми же N и K', async () => {
+  const alex = await signUp('alex')
+  const petya = await signUp('petya')
+  const a = await call('POST', '/games', { N: 3, K: 3 }, alex)
+  const p = await call('POST', '/games', { N: 5, K: 4 }, petya)
+  assert.notEqual(p.body.id, a.body.id)
+  assert.equal(p.body.x, 'petya')
+  assert.equal(p.body.o, null)
+})
+
+test('новая партия удаляет старую ждущую партию того же игрока', async () => {
+  const alex = await signUp('alex')
+  const old = await call('POST', '/games', { N: 3, K: 3 }, alex)
+  await call('POST', '/games', { N: 5, K: 4, invite: true }, alex)
+  const res = await call('GET', `/games/${old.body.id}`, undefined, alex)
+  assert.equal(res.status, 404)
+  assert.deepEqual(res.body, { error: 'Партия не найдена' })
+})
+
+test('приглашение: случайный игрок в него не попадает, друг входит по id', async () => {
+  const alex = await signUp('alex')
+  const masha = await signUp('masha')
+  const petya = await signUp('petya')
+
+  const inv = await call('POST', '/games', { N: 3, K: 3, invite: true }, alex)
+  assert.equal(inv.status, 201)
+  assert.equal(inv.body.invite, true)
+
+  const random = await call('POST', '/games', { N: 3, K: 3 }, petya)
+  assert.notEqual(random.body.id, inv.body.id)
+
+  const join = await call('POST', `/games/${inv.body.id}/join`, undefined, masha)
+  assert.equal(join.status, 200)
+  assert.equal(join.body.o, 'masha')
+  assert.equal(join.body.you, 2)
+})
+
+test('вход по ссылке: свои получают партию, третий 409, неизвестная 404', async () => {
+  const alex = await signUp('alex')
+  const masha = await signUp('masha')
+  const petya = await signUp('petya')
+  const { body: { id } } = await call('POST', '/games', { N: 3, K: 3, invite: true }, alex)
+
+  // создатель открыл свою ссылку: партия отдаётся, место нолика остаётся свободным
+  const own = await call('POST', `/games/${id}/join`, undefined, alex)
+  assert.equal(own.status, 200)
+  assert.equal(own.body.o, null)
+
+  await call('POST', `/games/${id}/join`, undefined, masha)
+  const again = await call('POST', `/games/${id}/join`, undefined, masha)
+  assert.equal(again.status, 200)
+  assert.equal(again.body.o, 'masha')
+
+  const third = await call('POST', `/games/${id}/join`, undefined, petya)
+  assert.equal(third.status, 409)
+  assert.deepEqual(third.body, { error: 'В партии уже два игрока' })
+
+  const none = await call('POST', '/games/000000000000/join', undefined, petya)
+  assert.equal(none.status, 404)
+  assert.deepEqual(none.body, { error: 'Партия не найдена' })
+})
+
+test('партию видят только её игроки', async () => {
+  const { alex, masha, id } = await startPair()
+  const petya = await signUp('petya')
+  assert.equal((await call('GET', `/games/${id}`, undefined, alex)).body.you, 1)
+  assert.equal((await call('GET', `/games/${id}`, undefined, masha)).body.you, 2)
+
+  const res = await call('GET', `/games/${id}`, undefined, petya)
+  assert.equal(res.status, 403)
+  assert.deepEqual(res.body, { error: 'Это не ваша партия' })
+})

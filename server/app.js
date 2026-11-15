@@ -1,8 +1,11 @@
 import express from 'express'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { X, O } from '../js/board.js'
 import { hashPassword, checkPassword, newToken } from './auth.js'
 import {
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
+  insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
 } from './db.js'
 
 // app.js собирает приложение Express: раздаёт страницу и отвечает на адреса API.
@@ -19,6 +22,25 @@ const NICKNAME = /^[A-Za-z0-9_]{3,20}$/
 // показывает текст error как есть. Все ожидаемые ошибки идут через неё, тексты в спеке.
 function fail(res, status, error) {
   return res.status(status).json({ error })
+}
+
+// gameView(row, userId) превращает строку партии из базы (результат findGame) в объект
+// для ответа, как в спеке. В базе лежат id игроков, 1 и 0 и история текстом, а страница
+// получает никнеймы, true и false и массив. you это сторона того, кто спрашивает:
+// 1 крестик, 2 нолик, userId это его id.
+function gameView(row, userId) {
+  return {
+    id: row.id,
+    N: row.N,
+    K: row.K,
+    invite: row.invite === 1,
+    x: row.x_name,
+    o: row.o_name ?? null,
+    you: row.x_id === userId ? X : O,
+    history: JSON.parse(row.history),
+    outcome: row.outcome,
+    winner: row.winner_name ?? null,
+  }
 }
 
 // createApp(db) возвращает приложение Express. База приходит параметром, а не открывается
@@ -91,6 +113,66 @@ function createApp(db) {
   app.post('/logout', requireUser, (req, res) => {
     deleteToken(db, req.token)
     res.json({})
+  })
+
+  // POST /games начинает партию. Сначала проверяются N и K, и только потом что-то меняется
+  // в базе, чтобы плохой запрос не стёр ждущую партию. Дальше убирается прежняя ждущая
+  // партия игрока: больше одной у него быть не может. Если нужен случайный соперник,
+  // ищется чужая ждущая партия с теми же N и K, и игрок садится в неё ноликом. Иначе
+  // создаётся новая, и игрок ждёт в ней крестиком. Приглашение (invite ровно true) всегда
+  // создаёт новую партию, а случайные игроки в неё не попадают.
+  // Два игрока не сядут в одну ждущую партию: node:sqlite синхронный, между поиском и записью
+  // нет await, а Node обрабатывает запросы по одному. me это id игрока.
+  app.post('/games', requireUser, (req, res) => {
+    const { N, K, invite } = req.body ?? {}
+    if (!Number.isInteger(N) || !Number.isInteger(K) || N < 3 || N > 15 || K < 3 || K > N) {
+      return fail(res, 400, 'N от 3 до 15, K от 3 до N')
+    }
+
+    const me = req.user.id
+    deleteWaitingGames(db, me)
+
+    if (invite !== true) {
+      const waiting = findWaitingGame(db, N, K)
+      if (waiting) {
+        setOpponent(db, waiting.id, me)
+        return res.status(201).json(gameView(findGame(db, waiting.id), me))
+      }
+    }
+
+    // 6 случайных байт дают 12 символов, угадать чужой id нельзя
+    const id = randomBytes(6).toString('hex')
+    insertGame(db, { id, N, K, xId: me, invite: invite === true })
+    res.status(201).json(gameView(findGame(db, id), me))
+  })
+
+  // POST /games/:id/join это вход по пригласительной ссылке. Если игрок уже в партии
+  // (создатель открыл свою ссылку или друг открыл её второй раз), партия отдаётся
+  // без ошибки. Если место нолика свободно, игрок его занимает. Если занято другим,
+  // 409, так же для законченной партии, в которой игрока не было.
+  // Сюда попадает и старая ссылка: если создатель начал другую партию, ждущая удалилась,
+  // и ответ 404.
+  app.post('/games/:id/join', requireUser, (req, res) => {
+    const row = findGame(db, req.params.id)
+    if (!row) return fail(res, 404, 'Партия не найдена')
+
+    const me = req.user.id
+    if (row.x_id === me || row.o_id === me) return res.json(gameView(row, me))
+    if (row.o_id !== null) return fail(res, 409, 'В партии уже два игрока')
+
+    setOpponent(db, row.id, me)
+    res.json(gameView(findGame(db, row.id), me))
+  })
+
+  // GET /games/:id отдаёт партию. Видят её только два игрока, зрителей нет.
+  // Браузер спрашивает этот адрес раз в секунду, чтобы узнать ход соперника.
+  app.get('/games/:id', requireUser, (req, res) => {
+    const row = findGame(db, req.params.id)
+    if (!row) return fail(res, 404, 'Партия не найдена')
+
+    const me = req.user.id
+    if (row.x_id !== me && row.o_id !== me) return fail(res, 403, 'Это не ваша партия')
+    res.json(gameView(row, me))
   })
 
   // здесь в следующих задачах появятся остальные адреса API
