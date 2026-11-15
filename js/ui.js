@@ -73,11 +73,12 @@ function renderBoard(state, root) {
 }
 
 // resultText(outcome, iWon) это строка итога для того, кто смотрит на экран.
-// outcome это 'win', 'draw' или 'resign', iWon говорит, выиграл ли он сам. Строка нужна
-// и живой партии по сети, и повтору, поэтому вынесена отдельно.
+// outcome это 'win', 'draw', 'resign' или 'timeout' (проигрыш по времени), iWon говорит,
+// выиграл ли он сам. Строка нужна и живой партии по сети, и повтору, поэтому вынесена отдельно.
 function resultText(outcome, iWon) {
   if (outcome === 'draw') return 'Ничья'
   if (outcome === 'resign') return iWon ? 'Соперник сдался' : 'Вы сдались'
+  if (outcome === 'timeout') return iWon ? 'У соперника вышло время' : 'Ваше время вышло'
   return iWon ? 'Вы выиграли' : 'Вы проиграли'
 }
 
@@ -87,6 +88,8 @@ function resultText(outcome, iWon) {
 // Без входа в режим "По сети" не попасть, поэтому подсказки про вход здесь нет.
 // online это данные сервера о партии, mine и rival это никнеймы игрока и его соперника,
 // p это сторона, чей сейчас ход. lines это две готовые строки.
+// В идущей партии вторая строка показывает, сколько секунд осталось на ход: это timeLeft
+// из последнего ответа сервера, округлённый вверх. Если timeLeft равен null, только число ходов.
 // Если опрос не дошёл до сервера (online.offline), вторая строка сообщает об этом.
 // Повтор идёт первым: у него режим 'pvp', и без этой ветки он показался бы обычной партией
 // вдвоём. Итог в повторе берётся из ответа сервера (online.outcome), а не из state.outcome,
@@ -112,12 +115,16 @@ function onlineLines(state) {
       online.invite ? 'Отправьте другу ссылку слева' : 'Ищем игрока с такими же N и K']
   } else if (state.outcome === null) {
     const who = p === online.you ? 'вы' : rival
-    lines = [`Ход: ${GLYPH[p]} (${who})`, count]
+    const left = online.timeLeft === null
+      ? count
+      : `Осталось ${Math.ceil(online.timeLeft / 1000)} с, сделано ходов: ${state.history.length}`
+    lines = [`Ход: ${GLYPH[p]} (${who})`, left]
   } else {
     // победителя по доске считаем сами: после победного хода currentPlayer это проигравший.
-    // Так текст верен и сразу после своего хода, до ответа сервера. Сдачу на доске не видно,
-    // её победитель берётся из ответа сервера
-    const iWon = state.outcome === 'resign' ? online.winner === mine : 3 - p === online.you
+    // Так текст верен и сразу после своего хода, до ответа сервера. Сдачу и проигрыш
+    // по времени на доске не видно, их победитель берётся из ответа сервера
+    const byServer = state.outcome === 'resign' || state.outcome === 'timeout'
+    const iWon = byServer ? online.winner === mine : 3 - p === online.you
     lines = [resultText(state.outcome, iWon), count]
   }
 

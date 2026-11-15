@@ -105,8 +105,8 @@ function sendResign(id) {
 // state.outcome меняется с каждым шагом, а итог нужен для строки "Итог: ...".
 // view это ответ сервера о партии.
 function onlineOf(view) {
-  const { id, invite, x, o, you, outcome, winner } = view
-  return { id, invite, x, o, you, outcome, winner }
+  const { id, invite, x, o, you, outcome, winner, timeLeft } = view
+  return { id, invite, x, o, you, outcome, winner, timeLeft }
 }
 
 // fromServer(view) превращает партию из ответа сервера в обычный объект партии,
@@ -114,6 +114,8 @@ function onlineOf(view) {
 // humanSide это сторона того, кто спросил (поле you).
 // Историю копируем, а не берём из ответа: иначе ход на экране менял бы и сам ответ.
 // rebuild сдачу по ходам не видит, поэтому при outcome === 'resign' она ставится отдельно.
+// С проигрышем по времени то же самое: на доске его нет, и при outcome === 'timeout'
+// он ставится отдельно. Остаток времени на ход лежит в online.timeLeft.
 // game это собираемая партия.
 function fromServer(view) {
   const game = createGame({
@@ -127,6 +129,7 @@ function fromServer(view) {
   game.history = [...view.history]
   rebuild(game)
   if (view.outcome === 'resign') resign(game)
+  if (view.outcome === 'timeout') game.outcome = 'timeout'
   game.online = onlineOf(view)
   return game
 }

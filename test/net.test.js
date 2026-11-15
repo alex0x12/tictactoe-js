@@ -10,7 +10,7 @@ import { fromServer, replayFromServer } from '../js/net.js'
 function view(over = {}) {
   return {
     id: 'abcdef123456', N: 3, K: 3, invite: false, x: 'alex', o: 'masha', you: O,
-    history: [0, 3, 1, 4, 2], outcome: 'win', winner: 'alex', ...over,
+    history: [0, 3, 1, 4, 2], outcome: 'win', winner: 'alex', timeLeft: null, ...over,
   }
 }
 
@@ -24,7 +24,7 @@ test('fromServer собирает доску, итог и победную ли�
   assert.equal(g.humanSide, O)
   assert.deepEqual(g.online, {
     id: 'abcdef123456', invite: false, x: 'alex', o: 'masha', you: O,
-    outcome: 'win', winner: 'alex',
+    outcome: 'win', winner: 'alex', timeLeft: null,
   })
 })
 
@@ -72,4 +72,14 @@ test('replayFromServer: redo доигрывает партию до той же 
   assert.deepEqual(r.history, [0, 3, 1, 4])
   assert.equal(r.outcome, null)
   assert.deepEqual(r.redo, [2])
+})
+
+test('fromServer: проигрыш по времени виден в outcome, остаток времени в online.timeLeft', () => {
+  const lost = fromServer(view({ history: [4, 0], outcome: 'timeout', winner: 'alex' }))
+  assert.equal(lost.outcome, 'timeout')
+  assert.equal(lost.online.timeLeft, null)
+
+  const live = fromServer(view({ history: [4], outcome: null, winner: null, timeLeft: 18000 }))
+  assert.equal(live.outcome, null)
+  assert.equal(live.online.timeLeft, 18000)
 })

@@ -512,9 +512,11 @@ function applyView(view) {
 // проверяет, что ход всё ещё за ИИ.
 // История на сервере только растёт. Если в ответе ходов меньше, чем на экране, он ушёл
 // с сервера раньше, чем туда дошёл только что сделанный ход, и стёр бы этот ход с экрана.
+// Партию заменяет каждый ответ, а не только изменившийся: в каждом ответе новое timeLeft,
+// и счётчик "Осталось ... с" обновляется раз в секунду.
 // Ошибка сети показывает "Нет связи с сервером", опрос продолжается: как только сервер
 // ответит, online.offline сбросится заменой партии. 401 разбирает handleError.
-// online это партия на экране в момент начала такта, changed говорит, чем ответ отличается.
+// online это партия на экране в момент начала такта.
 async function pollTick() {
   const online = state.online
   if (!online || state.replay || state.outcome !== null || sending || pollBusy) return
@@ -524,10 +526,7 @@ async function pollTick() {
     const view = await getGame(online.id)
     if (state.online?.id !== online.id || state.replay || sending) return
     if (view.history.length < state.history.length) return
-    const changed = view.o !== online.o
-      || view.history.length !== state.history.length
-      || view.outcome !== state.outcome
-    if (changed || online.offline) applyView(view)
+    applyView(view)
   } catch (error) {
     if (error.status === 401) handleError(error)
     else if (state.online?.id === online.id) {
