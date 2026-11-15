@@ -20,9 +20,15 @@
     <section class="panel profile" aria-label="Профиль">
       <h2>Профиль</h2>
 
-      <p class="logged-out" hidden>
-        Вы не вошли. Войти можно на <a href="/">странице игры</a> в режиме "По сети".
-      </p>
+      <div class="logged-out" hidden>
+        <p class="invite-note" hidden>Войдите, чтобы принять приглашение.</p>
+        <form class="login-form">
+          <label>Никнейм <input name="nickname" autocomplete="username" required></label>
+          <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
+          <button type="submit" value="login">Войти</button>
+          <button type="submit" value="register">Регистрация</button>
+        </form>
+      </div>
 
       <div class="account" hidden>
         <p>Вы: <b class="nickname"></b> <button type="button" class="btn-logout">Выйти</button></p>

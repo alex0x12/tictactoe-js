@@ -81,21 +81,19 @@ function resultText(outcome, iWon) {
   return iWon ? 'Вы выиграли' : 'Вы проиграли'
 }
 
-// onlineLines(state, account) возвращает две строки для правой панели в режиме "По сети":
+// onlineLines(state) возвращает две строки для правой панели в режиме "По сети":
 // первая это то, что пишется в .turn, вторая в .moves. Зовётся из renderStatus.
-// account это { token, nickname } вошедшего игрока или null. Он нужен только пустому полю,
-// когда партии по сети ещё нет: по нему выбирается, что подсказать игроку.
+// На пустом поле, когда партии по сети ещё нет, подсказка одна: выбрать соперника слева.
+// Без входа в режим "По сети" не попасть, поэтому подсказки про вход здесь нет.
 // online это данные сервера о партии, mine и rival это никнеймы игрока и его соперника,
 // p это сторона, чей сейчас ход. lines это две готовые строки.
 // Если опрос не дошёл до сервера (online.offline), вторая строка сообщает об этом.
 // Повтор идёт первым: у него режим 'pvp', и без этой ветки он показался бы обычной партией
 // вдвоём. Итог в повторе берётся из ответа сервера (online.outcome), а не из state.outcome,
 // который меняется с каждым шагом.
-function onlineLines(state, account) {
+function onlineLines(state) {
   const online = state.online
-  if (!online) {
-    return [account ? 'Выберите соперника слева' : 'Войдите, чтобы играть по сети', '']
-  }
+  if (!online) return ['Выберите соперника слева', '']
 
   const mine = online.you === X ? online.x : online.o
   const rival = online.you === X ? online.o : online.x
@@ -127,7 +125,7 @@ function onlineLines(state, account) {
   return lines
 }
 
-// renderStatus(state, panel, account) обновляет правую панель: чей ход или чем кончилась
+// renderStatus(state, panel) обновляет правую панель: чей ход или чем кончилась
 // партия, сколько сделано ходов и какие кнопки доступны. Ничего не возвращает и новый HTML
 // не строит, а меняет текст и атрибуты уже существующих элементов, иначе после каждой
 // перерисовки терялись бы обработчики кнопок.
@@ -136,9 +134,8 @@ function onlineLines(state, account) {
 // p это сторона, которая сделала бы следующий ход, считается по длине history.
 // ai говорит, что партия идёт против ИИ: тогда вместо значка пишем "вы" или "ИИ".
 // online говорит, что на экране режим "По сети", replay что идёт повтор партии: тексты
-// тогда берутся из onlineLines, а account передаётся дальше только ей. В повторе режим
-// партии 'pvp', поэтому одного online мало.
-function renderStatus(state, panel, account) {
+// тогда берутся из onlineLines. В повторе режим партии 'pvp', поэтому одного online мало.
+function renderStatus(state, panel) {
   const turn = panel.querySelector('.turn')
   const moves = panel.querySelector('.moves')
   const undoButton = panel.querySelector('.btn-undo')
@@ -153,7 +150,7 @@ function renderStatus(state, panel, account) {
   const replay = Boolean(state.replay)
 
   if (online || replay) {
-    const [first, second] = onlineLines(state, account)
+    const [first, second] = onlineLines(state)
     turn.textContent = first
     moves.textContent = second
   } else if (state.outcome === null) {
@@ -230,18 +227,16 @@ function setCursor(root, i) {
 }
 
 // renderAccount(account, state, panel) обновляет блок "Игра по сети" на левой панели,
-// panel это сам блок .online-only. Пока игрок не вошёл, видна форма входа, после входа
-// строка "Вы: alex", где никнейм это ссылка на страницу профиля, и кнопки выбора соперника.
-// Статистики и списка партий здесь нет, они на странице профиля. account это
-// { token, nickname } или null.
+// panel это сам блок .online-only. Блок виден только в режиме "По сети", а в него можно
+// попасть только после входа. Тут строка "Вы: alex", где никнейм это ссылка на страницу
+// профиля, и кнопки выбора соперника. Формы входа, статистики и списка партий здесь нет,
+// они на странице профиля. account это { token, nickname } или null.
 // Поле со ссылкой для друга видно, пока партия по приглашению ждёт соперника: ссылку
 // собираем из адреса страницы и номера партии. В повторе ссылка не нужна.
 // online это партия по сети, если она на экране, waiting говорит, что она ждёт друга.
 // Всё, что пришло с сервера, попадает на страницу через textContent и value, а не
 // через innerHTML: никнейм придумал другой человек, и вставленный как HTML он был бы дырой.
 function renderAccount(account, state, panel) {
-  panel.querySelector('.login-form').hidden = account !== null
-  panel.querySelector('.account').hidden = account === null
   panel.querySelector('.nickname').textContent = account?.nickname ?? ''
 
   const online = state.replay ? null : state.online

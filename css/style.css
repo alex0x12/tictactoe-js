@@ -116,6 +116,19 @@ body {
   font-size: 14px;
 }
 
+/* выключенный вариант режима ("По сети" без входа): серый, как выключенные группы
+"Сложность" и "Кто ходит первым". Внутри самих выключенных групп цвет не трогаем:
+их гасит opacity, и вторая серость сделала бы подписи слишком бледными */
+.params fieldset:not(:disabled) label:has(input:disabled) {
+  color: #a3abba;
+}
+
+.online-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #5a6478;
+}
+
 /* Поле. Колонкой, чтобы полоса повтора стояла под ним */
 .board-area {
   display: flex;
@@ -225,10 +238,6 @@ body {
 Без него счёт слился бы в одну строку.*/
 
 /* Режим "По сети": левая панель */
-.online-only input:not([type="radio"]) {
-  width: 100%;
-}
-
 .online-only button,
 .profile button {
   margin: 6px 6px 0 0;
@@ -265,6 +274,38 @@ body {
   margin: 8px 0 0;
   font-size: 13px;
   color: #d64545;
+}
+
+/* блок для невошедшего игрока (подсказка, форма) не шире 320px и стоит по центру панели.
+Профиль после входа остаётся на всю ширину панели */
+.profile .logged-out {
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+/* строка ошибок общая для формы и профиля и стоит рядом с блоком, а не внутри него.
+Пока форма видна, ей даём ту же ширину и центр, чтобы ошибка входа была под формой,
+а не у края панели */
+.profile .logged-out:not([hidden]) ~ .profile-error {
+  max-width: 320px;
+  margin: 8px auto 0;
+}
+
+/* форма входа на странице профиля: поля друг под другом на всю ширину блока */
+.profile .login-form label {
+  display: block;
+  margin: 12px 0 4px;
+  font-size: 14px;
+}
+
+.profile .login-form input {
+  width: 100%;
+}
+
+.profile .invite-note {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #5a6478;
 }
 
 .invite-link {

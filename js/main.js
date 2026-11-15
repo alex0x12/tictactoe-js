@@ -5,12 +5,11 @@ import {
 } from './ui.js'
 import {
   loadSettings, saveSettings, loadGame, saveGame, clearGame, loadStats, statsKey, recordResult,
-  loadAccount, saveAccount, clearAccount, loadOnlineId, saveOnlineId, clearOnlineId,
+  loadAccount, clearAccount, loadOnlineId, saveOnlineId, clearOnlineId,
 } from './storage.js'
 import { chooseMove } from './ai.js'
 import {
-  register, login, newGame, joinGame, getGame, sendMove, sendResign, fromServer,
-  replayFromServer,
+  newGame, joinGame, getGame, sendMove, sendResign, fromServer, replayFromServer,
 } from './net.js'
 
 // main.js это точка входа. Тут сходятся модель партии из game.js, отрисовка из ui.js,
@@ -20,7 +19,10 @@ import {
 // Ссылки на элементы страницы ищем один раз при загрузке модуля.
 // boardElement это поле, statusElement правая панель, дальше ползунки и их подписи.
 // aiOptions это группы "Сложность" и "Кто ходит первым", они нужны только против ИИ.
-// onlineElement это блок "Игра по сети" на левой панели, loginForm форма входа внутри него.
+// onlineElement это блок "Игра по сети" на левой панели. onlineRadio это вариант "По сети"
+// в группе "Режим", onlineHint строка под группой "Чтобы играть по сети, войдите в учётную
+// запись", onlineLost начало этой строки "Вход больше не действует.", оно видно, если вход
+// пропал.
 // replayElement это полоса повтора под полем.
 const boardElement = document.getElementById('board')
 const statusElement = document.getElementById('status')
@@ -30,7 +32,9 @@ const winInput = document.getElementById('win')
 const winValue = document.getElementById('win-value')
 const aiOptions = document.querySelectorAll('.ai-only')
 const onlineElement = document.querySelector('.online-only')
-const loginForm = document.querySelector('.login-form')
+const onlineRadio = document.querySelector('input[name="mode"][value="online"]')
+const onlineHint = document.querySelector('.online-hint')
+const onlineLost = document.querySelector('.online-lost')
 const replayElement = document.querySelector('.replay')
 
 // state это текущая партия, объект GameState из game.js. Единственный источник истины,
@@ -39,13 +43,11 @@ let state
 
 // Переменные игры по сети. pollTimer это id setInterval опроса или null. pollBusy равен
 // true, пока запрос опроса ещё не вернулся: при медленной сети запросы иначе накладывались
-// бы друг на друга. sending равен true, пока свой ход летит на сервер. pendingJoin это id
-// из ?game=, если по ссылке пришёл ещё не вошедший игрок: принять приглашение он сможет
-// после входа. replayTimer это id setInterval проигрывания повтора или null.
+// бы друг на друга. sending равен true, пока свой ход летит на сервер. replayTimer это id
+// setInterval проигрывания повтора или null.
 let pollTimer = null
 let pollBusy = false
 let sending = false
-let pendingJoin = null
 let replayTimer = null
 
 // checkedValue(name) возвращает value выбранной радиокнопки из группы name.
@@ -92,14 +94,15 @@ function createNewGame() {
 }
 
 // draw() перерисовывает всё, что зависит от состояния: поле, панель статуса, счёт, блок
-// входа и полосу повтора. Её зовёт afterChange, а в разделе про сеть ещё и обработчики, которые меняют только
-// вид страницы: вход и выход. Счёт читается из хранилища при каждой перерисовке, это дёшево,
-// а результат только что законченной партии уже записан. Учётная запись читается так же:
-// account это { token, nickname } или null, если игрок не вошёл.
+// "Игра по сети" и полосу повтора. Её зовёт afterChange, а в разделе про сеть ещё
+// и обработчики, которые меняют только вид страницы. Счёт читается из хранилища при каждой
+// перерисовке, это дёшево, а результат только что законченной партии уже записан.
+// Учётная запись читается так же и нужна только блоку "Игра по сети": account это
+// { token, nickname } или null, если игрок не вошёл.
 function draw() {
   const account = loadAccount()
   renderBoard(state, boardElement)
-  renderStatus(state, statusElement, account)
+  renderStatus(state, statusElement)
   renderScore(state, loadStats().items[statsKey(state)], statusElement)
   renderAccount(account, state, onlineElement)
   renderReplay(state, replayElement)
@@ -299,6 +302,8 @@ document.querySelector('.btn-resign').addEventListener('click', () => {
 // K не может быть больше N, поэтому верхняя граница ползунка K следует за N, а слишком
 // большое K подрезается. Группы "Сложность" и "Кто ходит первым" выключаются в режимах
 // "два игрока" и "по сети", а блок "Игра по сети" виден только в последнем.
+// Режим "По сети" доступен только после входа: пока игрок не вошёл (loggedIn), вариант
+// выключен, а под группой "Режим" видна строка со ссылкой на профиль, где можно войти.
 // Зовётся на каждый сдвиг ползунка, при смене радиокнопки и из showSettings.
 function refreshOutputs() {
   winInput.max = sizeInput.value
@@ -307,6 +312,10 @@ function refreshOutputs() {
   winValue.value = winInput.value
   for (const group of aiOptions) group.disabled = checkedValue('mode') !== 'ai'
   onlineElement.hidden = checkedValue('mode') !== 'online'
+
+  const loggedIn = loadAccount() !== null
+  onlineRadio.disabled = !loggedIn
+  onlineHint.hidden = loggedIn
 }
 
 // showSettings(s) ставит панель на параметры s: ползунки, режим, сложность, кто первый.
@@ -360,29 +369,33 @@ for (const radio of document.querySelectorAll('.params input[type="radio"]')) {
 // потому что isLegal не пропускает ходы, пока outcome не null.
 // Если перезагрузили страницу, пока ИИ считал, ход за ним: запрашиваем его ход заново.
 // Если партии нет, начинает новую, а панель ставит по сохранённым настройкам.
-// Порядок проверок такой: ссылка-приглашение, потом локальная партия, потом партия по сети
-// из ttt.online (только если сохранённый режим "По сети"), потом новая партия. Пункты 2 и 3
-// не конфликтуют: при переходе в режим "По сети" ttt.game удаляется.
+// Порядок проверок такой: ссылка ?game=, потом локальная партия, потом партия по сети
+// из ttt.online (только если сохранённый режим "По сети" и игрок вошёл), потом новая партия.
+// Пункты 2 и 3 не конфликтуют: при переходе в режим "По сети" ttt.game удаляется.
+// Без входа режим "По сети" недоступен: ссылка ?game= отправляет на страницу профиля, а
+// сохранённый режим "По сети" превращается в "Два игрока".
 // saved это партия из хранилища или null, settings это настройки или null,
 // invited это id из ?game= или null, onlineId это id партии по сети или null.
 function restoreOrStart() {
   // 1. пришли по ссылке ?game=. Она приходит от друга как приглашение или из списка
-  // "Мои партии" на странице профиля. Переход по ней уже говорит, чего хочет игрок,
-  // поэтому режим "По сети" включается без вопроса. Локальная партия при этом удаляется,
-  // как при любом переходе в этот режим. ?game убираем из адреса, чтобы F5 не заходил
-  // по ссылке снова. Дальше joinById: идущая партия показывается живой, своя законченная
-  // повтором, чужая даёт ошибку сервера. window.history написано полностью, чтобы
-  // не путать с state.history
+  // "Мои партии" на странице профиля. Если игрок не вошёл, уходим на страницу профиля и
+  // больше ничего не делаем: войти можно только там, а после входа профиль вернёт игрока
+  // по этой же ссылке. replace, а не обычный переход, чтобы кнопка "Назад" не возвращала
+  // на пересылку. Если вошёл, переход по ссылке уже говорит, чего хочет игрок, поэтому режим
+  // "По сети" включается без вопроса. Локальная партия при этом удаляется, как при любом
+  // переходе в этот режим. ?game убираем из адреса, чтобы F5 не заходил по ссылке снова.
+  // Дальше joinById: идущая партия показывается живой, своя законченная повтором, чужая
+  // даёт ошибку сервера. window.history написано полностью, чтобы не путать с state.history
   const invited = new URLSearchParams(location.search).get('game')
   if (invited !== null) {
+    if (!loadAccount()) {
+      location.replace(`/profile.html?game=${encodeURIComponent(invited)}`)
+      return
+    }
     window.history.replaceState(null, '', location.pathname)
     showSettings({ ...(loadSettings() ?? readSettings()), mode: 'online' })
     startGame()
-    if (loadAccount()) joinById(invited)
-    else {
-      pendingJoin = invited
-      showError('Войдите, чтобы принять приглашение')
-    }
+    joinById(invited)
     return
   }
 
@@ -390,13 +403,16 @@ function restoreOrStart() {
 
   if (saved === null) {
     const settings = loadSettings()
+    // 3. сохранённый режим "По сети", но игрок не вошёл (например, вышел на странице
+    // профиля): начинаем с режима "Два игрока"
+    if (settings?.mode === 'online' && !loadAccount()) settings.mode = 'pvp'
     // startGame забудет ttt.online, поэтому номер партии читаем заранее
     const onlineId = loadOnlineId()
     if (settings) showSettings(settings)
     else refreshOutputs()
     startGame()
-    // 3. режим "По сети" и сохранённая партия на сервере
-    if (settings?.mode === 'online' && onlineId && loadAccount()) openSaved(onlineId)
+    // режим "По сети" остался только у вошедшего игрока: продолжаем его партию на сервере
+    if (settings?.mode === 'online' && onlineId) openSaved(onlineId)
     return
   }
 
@@ -411,6 +427,9 @@ function restoreOrStart() {
 }
 
 // --- игра по сети ---
+// Здесь выбор соперника, ход по сети, опрос и загрузка партии с сервера. Вход и регистрация
+// на странице игры не делаются: форма живёт на странице профиля, а режим "По сети" включается
+// только после входа.
 
 // showError(text) пишет текст в красную строку блока "Игра по сети". Пустая строка
 // её очищает. Все ошибки сервера показываются тут как есть: net.js уже собрал для них
@@ -420,15 +439,21 @@ function showError(text) {
 }
 
 // handleError(error) разбирает ошибку запроса к серверу. 401 на запрос с токеном значит,
-// что токен больше не годится, например базу удалили: забываем его и просим войти заново.
-// Если на экране была партия по сети, она уже недоступна, поэтому начинаем с пустого поля.
-// Локальную партию при этом не трогаем. Остальные ошибки просто показываем.
+// что вход пропал: игрок вышел на странице профиля в другой вкладке или сервер больше не
+// знает токен, например базу удалили. Забываем токен. Без входа режим "По сети" недоступен,
+// поэтому, если он был включён (wasOnline), переключаемся на "Два игрока" и начинаем
+// пустую партию, а на месте ошибки под группой "Режим" пишется "Вход больше не действует."
+// Партия на сервере остаётся, вернуться в неё можно из профиля после входа.
+// Локальную партию при этом не трогаем. Остальные ошибки просто показываем в блоке
+// "Игра по сети".
 function handleError(error) {
   if (error.status === 401) {
+    const wasOnline = state.mode === 'online'
     clearAccount()
-    if (state.mode === 'online') startGame()
-    else draw()
-    showError('Войдите заново')
+    onlineLost.hidden = false
+    if (wasOnline) setChecked('mode', 'pvp')
+    refreshOutputs()
+    if (wasOnline) startGame()
     return
   }
   showError(error.message)
@@ -587,16 +612,25 @@ document.querySelector('.btn-invite').addEventListener('click', () => startOnlin
 // друга как приглашение и из списка "Мои партии" на странице профиля. Сервер на join отдаёт
 // партию и тому, кто в ней уже играет, поэтому оба случая идут одним путём. Идущая партия
 // показывается живой, а своя законченная повтором. Чужая партия даёт ошибку сервера
-// "В партии уже два игрока". Сначала pendingJoin сбрасывается, чтобы после входа не открывать
-// ту же ссылку второй раз.
+// "В партии уже два игрока". Зовётся только для вошедшего игрока: без входа restoreOrStart
+// отправляет на страницу профиля, и ссылка вернёт сюда уже после входа.
+// 401 здесь значит, что токен в браузере устарел, например сервер больше его не знает.
+// Тогда игрок на деле не вошёл, а ссылка ?game= уже убрана из адреса, и если просто
+// переключить на "Два игрока", как делает handleError, приглашение потеряется. Поэтому
+// забываем токен и уходим на страницу профиля с этой же ссылкой: после входа она вернёт
+// игрока сюда. Остальные ошибки разбирает handleError.
 async function joinById(id) {
-  pendingJoin = null
   try {
     const view = await joinGame(id)
     showError('')
     if (view.outcome !== null) openReplay(view)
     else showOnlineGame(view)
   } catch (error) {
+    if (error.status === 401) {
+      clearAccount()
+      location.replace(`/profile.html?game=${encodeURIComponent(id)}`)
+      return
+    }
     handleError(error)
   }
 }
@@ -616,31 +650,6 @@ async function openSaved(id) {
 
 // Поле со ссылкой выделяет весь текст по клику, так её проще скопировать
 document.querySelector('.invite-link').addEventListener('focus', (event) => event.target.select())
-
-// Форма входа. Обе кнопки отправляют форму, event.submitter говорит, какая из них нажата:
-// "Регистрация" или "Войти". Enter в поле нажимает первую, то есть "Войти".
-// send это функция из net.js, которую выбрала кнопка. Токен и никнейм из ответа
-// запоминаются в хранилище, после этого draw показывает "Вы: ...". Если игрок пришёл
-// по ссылке-приглашению и войти не успел, id партии ждёт в pendingJoin: после входа
-// принимаем приглашение сразу.
-loginForm.addEventListener('submit', async (event) => {
-  event.preventDefault()
-  const nickname = loginForm.elements.nickname.value.trim()
-  const password = loginForm.elements.password.value
-  const send = event.submitter?.value === 'register' ? register : login
-
-  try {
-    saveAccount(await send(nickname, password))
-  } catch (error) {
-    showError(error.message)
-    return
-  }
-
-  loginForm.reset()
-  showError('')
-  draw()
-  if (pendingJoin) joinById(pendingJoin)
-})
 
 // --- повтор ---
 

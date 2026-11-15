@@ -1,14 +1,20 @@
-import { getProfile, logout } from './net.js'
-import { loadAccount, clearAccount, clearOnlineId } from './storage.js'
+import { getProfile, logout, register, login } from './net.js'
+import { loadAccount, saveAccount, clearAccount, clearOnlineId } from './storage.js'
 
 // profile.js это страница профиля, profile.html. Она показывает вошедшему игроку его
-// статистику и список его партий, а ещё тут кнопка "Выйти". Вход на этой странице не сделан:
-// форма входа одна, на странице игры, а двух одинаковых форм не нужно. Если игрок не вошёл,
-// страница показывает ссылку туда. Всё, что пришло с сервера, попадает на страницу через
-// textContent и createElement, не через innerHTML: никнейм придумал другой человек.
+// статистику и список его партий, а ещё тут кнопка "Выйти". Если игрок не вошёл, вместо
+// профиля форма входа и регистрации. Форма одна на всю игру и живёт только здесь, а не
+// на странице игры. Сюда же страница игры пересылает друга, который открыл ссылку-приглашение,
+// не войдя: после входа страница возвращает его по этой ссылке на страницу игры.
+// Всё, что пришло с сервера, попадает на страницу через textContent и createElement,
+// не через innerHTML: никнейм придумал другой человек.
 
-// page это блок страницы с профилем
+// page это блок страницы с профилем, loginForm форма входа внутри него.
+// invited это id партии из ?game=, если сюда переслала страница игры: друг открыл
+// ссылку-приглашение, не войдя. Иначе null.
 const page = document.querySelector('.profile')
+const loginForm = page.querySelector('.login-form')
+const invited = new URLSearchParams(location.search).get('game')
 
 // RESULT_WORDS это итог партии словом для списка "Мои партии". Цвет точки дублируется
 // словом, потому что красный и зелёный легко спутать.
@@ -57,19 +63,34 @@ function showError(text) {
   page.querySelector('.profile-error').textContent = text
 }
 
-// showLoggedOut() показывает "Вы не вошли" и прячет данные профиля
+// goToInvite() возвращает игрока на страницу игры по приглашению. replace, а не обычный
+// переход: иначе кнопка "Назад" из партии вернула бы на эту пересылку.
+function goToInvite() {
+  location.replace(`/?game=${encodeURIComponent(invited)}`)
+}
+
+// showLoggedOut() показывает форму входа и прячет данные профиля. Если сюда переслали
+// по приглашению, над формой видна подсказка "Войдите, чтобы принять приглашение".
 function showLoggedOut() {
   page.querySelector('.logged-out').hidden = false
+  page.querySelector('.invite-note').hidden = invited === null
   page.querySelector('.account').hidden = true
 }
 
-// showProfile() загружает профиль и рисует его. Если игрок не вошёл, сервер не спрашиваем.
+// showProfile() загружает профиль и рисует его. Если игрок не вошёл, сервер не спрашиваем,
+// показываем форму входа. Если страницу открыли по приглашению (?game=) и игрок уже вошёл,
+// например в другой вкладке, профиль не нужен: приглашение ждёт на странице игры.
 // 401 значит, что токен больше не годится, например базу удалили: забываем его и показываем
-// "Вы не вошли". Остальные ошибки пишем в строку ошибок.
+// форму входа. Остальные ошибки пишем в строку ошибок.
 async function showProfile() {
   showError('')
   if (!loadAccount()) {
     showLoggedOut()
+    return
+  }
+
+  if (invited !== null) {
+    goToInvite()
     return
   }
 
@@ -88,6 +109,29 @@ async function showProfile() {
     showError(error.message)
   }
 }
+
+// Форма входа. Обе кнопки отправляют форму, event.submitter говорит, какая из них нажата:
+// "Регистрация" или "Войти". Enter в поле нажимает первую, то есть "Войти". send это функция
+// из net.js, которую выбрала кнопка. Токен и никнейм из ответа запоминаются в хранилище.
+// Профиль после входа сама не рисует, а зовёт showProfile: тот либо покажет профиль,
+// либо уведёт по приглашению на страницу игры. Ошибки сервера ("Неверный никнейм или пароль",
+// "Этот никнейм уже занят" и другие) пишутся в строку ошибок под формой.
+loginForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  const nickname = loginForm.elements.nickname.value.trim()
+  const password = loginForm.elements.password.value
+  const send = event.submitter?.value === 'register' ? register : login
+
+  try {
+    saveAccount(await send(nickname, password))
+  } catch (error) {
+    showError(error.message)
+    return
+  }
+
+  loginForm.reset()
+  showProfile()
+})
 
 // Выход. Если сервер не ответил, из учётной записи выходим всё равно: токен забывает браузер.
 // ttt.online тоже забываем: партия на странице игры принадлежала этому игроку.

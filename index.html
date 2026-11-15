@@ -32,6 +32,10 @@
         <label><input type="radio" name="mode" value="pvp" checked> Два игрока</label>
         <label><input type="radio" name="mode" value="ai"> Против ИИ</label>
         <label><input type="radio" name="mode" value="online"> По сети</label>
+        <p class="online-hint" hidden>
+          <span class="online-lost" hidden>Вход больше не действует. </span>
+          Чтобы играть по сети, <a href="/profile.html">войдите в учётную запись</a>.
+        </p>
       </fieldset>
 
       <fieldset class="ai-only" disabled>
@@ -47,23 +51,14 @@
         <label><input type="radio" name="first" value="ai"> ИИ</label>
       </fieldset>
 
-      <!-- Режим "По сети": форма входа, пока игрок не вошёл, потом его данные и кнопки -->
+      <!-- Режим "По сети": доступен только после входа. Вход и регистрация на странице профиля -->
       <fieldset class="online-only" hidden>
         <legend>Игра по сети</legend>
 
-        <form class="login-form">
-          <label>Никнейм <input name="nickname" autocomplete="username" required></label>
-          <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
-          <button type="submit" value="login">Войти</button>
-          <button type="submit" value="register">Регистрация</button>
-        </form>
-
-        <div class="account" hidden>
-          <p>Вы: <a class="nickname" href="/profile.html"></a></p>
-          <button type="button" class="btn-random">Случайный соперник</button>
-          <button type="button" class="btn-invite">Пригласить друга</button>
-          <label class="invite" hidden>Ссылка для друга <input class="invite-link" readonly></label>
-        </div>
+        <p>Вы: <a class="nickname" href="/profile.html"></a></p>
+        <button type="button" class="btn-random">Случайный соперник</button>
+        <button type="button" class="btn-invite">Пригласить друга</button>
+        <label class="invite" hidden>Ссылка для друга <input class="invite-link" readonly></label>
 
         <p class="online-error" role="alert"></p>
       </fieldset>
