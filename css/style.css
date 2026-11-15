@@ -2,6 +2,12 @@
   box-sizing: border-box;
 }
 
+/* атрибут hidden проигрывает любому правилу display, поэтому без этого
+спрятанный блок с display: flex или grid остался бы на экране */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
@@ -183,3 +189,75 @@ body {
 }
 /* white-space: pre-line заставляет браузер показывать \n из текста.
 Без него счёт слился бы в одну строку.*/
+
+/* Режим "По сети": левая панель */
+.online-only input:not([type="radio"]) {
+  width: 100%;
+}
+
+.online-only button {
+  margin: 6px 6px 0 0;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: #1c2230;
+  background: #fff;
+  border: 1px solid #c7cedb;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.online-only button:hover {
+  background: #eef2fb;
+}
+
+.online-only .stats {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #5a6478;
+}
+
+.online-only h3 {
+  margin: 16px 0 6px;
+  font-size: 13px;
+  color: #5a6478;
+}
+
+.online-error {
+  min-height: 1.2em;
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #d64545;
+}
+
+.invite-link {
+  width: 100%;
+}
+
+/* Рейтинг в правой панели */
+.status .score + h2 {
+  margin-top: 24px;
+}
+
+.leaderboard {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.leaderboard th,
+.leaderboard td {
+  padding: 0.2rem 0.4rem;
+  text-align: right;
+}
+
+.leaderboard th:first-child,
+.leaderboard td:first-child {
+  text-align: left;
+}
+
+.leaderboard-note {
+  margin: 0;
+  font-size: 13px;
+  color: #5a6478;
+}
