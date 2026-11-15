@@ -149,8 +149,48 @@ function setOpponent(db, id, userId) {
   db.prepare('UPDATE games SET o_id = ? WHERE id = ?').run(userId, id)
 }
 
+// saveMoves(db, id, history, outcome, winnerId) записывает ходы и итог партии id.
+// history приходит массивом, в базу уходит JSON-текстом. outcome это null, 'win', 'draw'
+// или 'resign', winnerId это id победителя или null.
+function saveMoves(db, id, history, outcome, winnerId) {
+  db.prepare('UPDATE games SET history = ?, outcome = ?, winner_id = ? WHERE id = ?')
+    .run(JSON.stringify(history), outcome, winnerId, id)
+}
+
+// ADD_RESULT это готовый запрос на каждый итог. Имя столбца нельзя передать через ?,
+// поэтому запросов три, а не один с подстановкой. Склеивать SQL из строки, пришедшей
+// снаружи, нельзя никогда: так делается взлом через SQL-инъекцию.
+const ADD_RESULT = {
+  win: 'UPDATE users SET wins = wins + 1 WHERE id = ?',
+  draw: 'UPDATE users SET draws = draws + 1 WHERE id = ?',
+  loss: 'UPDATE users SET losses = losses + 1 WHERE id = ?',
+}
+
+// addResult(db, userId, result) прибавляет единицу к счётчику игрока userId.
+// result это 'win', 'draw' или 'loss'. Зовётся один раз для каждого игрока, когда
+// партия закончилась.
+function addResult(db, userId, result) {
+  db.prepare(ADD_RESULT[result]).run(userId)
+}
+
+// --- рейтинг ---
+
+// leaderboard(db) возвращает до 20 лучших игроков, которые сыграли хотя бы одну партию:
+// { nickname, wins, draws, losses, points }. Очки считает сам запрос, победа даёт 3,
+// ничья 1. Порядок: больше очков, при равенстве больше побед, дальше по никнейму.
+// Последний ключ нужен, чтобы при полном равенстве порядок не менялся от запроса к запросу.
+function leaderboard(db) {
+  return db.prepare(`
+    SELECT nickname, wins, draws, losses, wins * 3 + draws AS points
+    FROM users
+    WHERE wins + draws + losses > 0
+    ORDER BY points DESC, wins DESC, nickname
+    LIMIT 20`).all()
+}
+
 export {
   openDb,
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
   insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
+  saveMoves, addResult, leaderboard,
 }

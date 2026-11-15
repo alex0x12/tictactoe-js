@@ -3,9 +3,11 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { X, O } from '../js/board.js'
 import { hashPassword, checkPassword, newToken } from './auth.js'
+import { createGame, currentPlayer, isLegal, applyMove, resign, rebuild } from '../js/game.js'
 import {
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
   insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
+  saveMoves, addResult, leaderboard,
 } from './db.js'
 
 // app.js собирает приложение Express: раздаёт страницу и отвечает на адреса API.
@@ -174,6 +176,61 @@ function createApp(db) {
     if (row.x_id !== me && row.o_id !== me) return fail(res, 403, 'Это не ваша партия')
     res.json(gameView(row, me))
   })
+
+  // POST /games/:id/move делает ход или принимает сдачу. Проверки идут строго в этом порядке,
+  // от них зависит, какую ошибку увидит игрок: партия есть, игрок в ней, соперник пришёл,
+  // партия не закончена. Потом партия собирается из истории тем же кодом, что и в браузере:
+  // createGame в режиме 'pvp', история из базы и rebuild. rebuild истории доверяет, и здесь
+  // это можно: в базу история попадает только после isLegal.
+  // me это id игрока, side его сторона, opponentId id соперника, winnerId победитель
+  // или null.
+  app.post('/games/:id/move', requireUser, (req, res) => {
+    const row = findGame(db, req.params.id)
+    if (!row) return fail(res, 404, 'Партия не найдена')
+    const me = req.user.id
+    if (row.x_id !== me && row.o_id !== me) return fail(res, 403, 'Это не ваша партия')
+    if (row.o_id === null) return fail(res, 409, 'Соперник ещё не пришёл')
+    if (row.outcome !== null) return fail(res, 409, 'Партия уже закончена')
+
+    const side = row.x_id === me ? X : O
+    const opponentId = side === X ? row.o_id : row.x_id
+
+    const state = createGame({
+      N: row.N, K: row.K, mode: 'pvp', difficulty: 'medium', humanFirst: true, seed: 0,
+    })
+    state.history = JSON.parse(row.history)
+    rebuild(state)
+
+    let winnerId = null
+    const body = req.body ?? {}
+    if (body.resign === true) {
+      // сдаться можно и не в свою очередь, поэтому очередь тут не проверяется
+      resign(state)
+      winnerId = opponentId
+    } else {
+      if (currentPlayer(state) !== side) return fail(res, 409, 'Не ваш ход')
+      if (!isLegal(state, body.cell)) return fail(res, 400, 'Так ходить нельзя')
+      applyMove(state, body.cell)
+      if (state.outcome === 'win') winnerId = me
+    }
+
+    saveMoves(db, row.id, state.history, state.outcome, winnerId)
+
+    // счётчики меняются ровно один раз: после конца партии сюда уже не попасть,
+    // проверка outcome выше не пропустит
+    if (state.outcome === 'draw') {
+      addResult(db, me, 'draw')
+      addResult(db, opponentId, 'draw')
+    } else if (winnerId !== null) {
+      addResult(db, winnerId, 'win')
+      addResult(db, winnerId === me ? opponentId : me, 'loss')
+    }
+
+    res.json(gameView(findGame(db, row.id), me))
+  })
+
+  // GET /leaderboard это общий рейтинг, токен не нужен: таблицу видно и до входа
+  app.get('/leaderboard', (req, res) => res.json(leaderboard(db)))
 
   // здесь в следующих задачах появятся остальные адреса API
 

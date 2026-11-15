@@ -265,3 +265,116 @@ test('партию видят только её игроки', async () => {
   assert.equal(res.status, 403)
   assert.deepEqual(res.body, { error: 'Это не ваша партия' })
 })
+
+// --- задача 4: ходы, сдача, конец партии, рейтинг ---
+
+test('ходы по очереди, оба игрока видят одну историю', async () => {
+  const { alex, masha, id } = await startPair()
+  const r1 = await move(alex, id, 4)
+  assert.equal(r1.status, 200)
+  assert.deepEqual(r1.body.history, [4])
+
+  const r2 = await move(masha, id, 0)
+  assert.deepEqual(r2.body.history, [4, 0])
+
+  const seen = await call('GET', `/games/${id}`, undefined, alex)
+  assert.deepEqual(seen.body.history, [4, 0])
+})
+
+test('ход не в свою очередь 409, в занятую или несуществующую клетку 400', async () => {
+  const { alex, masha, id } = await startPair()
+  const early = await move(masha, id, 0)
+  assert.equal(early.status, 409)
+  assert.deepEqual(early.body, { error: 'Не ваш ход' })
+
+  await move(alex, id, 4)
+  for (const cell of [4, 9, -1, 1.5, '0', undefined]) {
+    const res = await move(masha, id, cell)
+    assert.equal(res.status, 400, String(cell))
+    assert.deepEqual(res.body, { error: 'Так ходить нельзя' })
+  }
+})
+
+test('ход и сдача до прихода соперника 409, посторонний 403', async () => {
+  const alex = await signUp('alex')
+  const petya = await signUp('petya')
+  const { body: { id } } = await call('POST', '/games', { N: 3, K: 3, invite: true }, alex)
+
+  const early = await move(alex, id, 4)
+  assert.equal(early.status, 409)
+  assert.deepEqual(early.body, { error: 'Соперник ещё не пришёл' })
+
+  const resign = await call('POST', `/games/${id}/move`, { resign: true }, alex)
+  assert.equal(resign.status, 409)
+
+  const stranger = await move(petya, id, 4)
+  assert.equal(stranger.status, 403)
+  assert.deepEqual(stranger.body, { error: 'Это не ваша партия' })
+})
+
+test('победа: итог, победитель, запрет ходов и рейтинг', async () => {
+  const { alex, masha, id } = await startPair()
+  // крестик собирает верхнюю строку 0 1 2, нолик ходит в 3 и 4
+  for (const [token, cell] of [[alex, 0], [masha, 3], [alex, 1], [masha, 4]]) {
+    assert.equal((await move(token, id, cell)).status, 200)
+  }
+  const last = await move(alex, id, 2)
+  assert.equal(last.body.outcome, 'win')
+  assert.equal(last.body.winner, 'alex')
+
+  const after = await move(masha, id, 5)
+  assert.equal(after.status, 409)
+  assert.deepEqual(after.body, { error: 'Партия уже закончена' })
+
+  const board = await call('GET', '/leaderboard')
+  assert.equal(board.status, 200)
+  assert.deepEqual(board.body, [
+    { nickname: 'alex', wins: 1, draws: 0, losses: 0, points: 3 },
+    { nickname: 'masha', wins: 0, draws: 0, losses: 1, points: 0 },
+  ])
+})
+
+test('ничья даёт обоим по ничьей и по очку', async () => {
+  const { alex, masha, id } = await startPair()
+  // доска заполняется без линии: ✕ ○ ✕ / ✕ ○ ○ / ○ ✕ ✕
+  const cells = [0, 1, 2, 4, 3, 5, 7, 6, 8]
+  let res
+  for (let i = 0; i < cells.length; i++) {
+    res = await move(i % 2 === 0 ? alex : masha, id, cells[i])
+    assert.equal(res.status, 200)
+  }
+  assert.equal(res.body.outcome, 'draw')
+  assert.equal(res.body.winner, null)
+
+  const board = await call('GET', '/leaderboard')
+  assert.deepEqual(board.body, [
+    { nickname: 'alex', wins: 0, draws: 1, losses: 0, points: 1 },
+    { nickname: 'masha', wins: 0, draws: 1, losses: 0, points: 1 },
+  ])
+})
+
+test('сдача отдаёт победу сопернику, сдаться можно не в свою очередь', async () => {
+  const { alex, masha, id } = await startPair()
+  await move(alex, id, 4)
+  await move(masha, id, 0)
+
+  // сейчас очередь alex, а сдаётся masha
+  const res = await call('POST', `/games/${id}/move`, { resign: true }, masha)
+  assert.equal(res.status, 200)
+  assert.equal(res.body.outcome, 'resign')
+  assert.equal(res.body.winner, 'alex')
+  assert.deepEqual(res.body.history, [4, 0])
+
+  const board = await call('GET', '/leaderboard')
+  assert.deepEqual(board.body.map((r) => [r.nickname, r.wins, r.losses]), [
+    ['alex', 1, 0],
+    ['masha', 0, 1],
+  ])
+})
+
+test('в рейтинг не попадают те, кто ещё не играл', async () => {
+  await signUp('alex')
+  const board = await call('GET', '/leaderboard')
+  assert.equal(board.status, 200)
+  assert.deepEqual(board.body, [])
+})
