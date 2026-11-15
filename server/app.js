@@ -7,7 +7,7 @@ import { createGame, currentPlayer, isLegal, applyMove, resign, rebuild } from '
 import {
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
   insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
-  saveMoves, addResult, leaderboard,
+  gamesOfUser, saveMoves, addResult, leaderboard,
 } from './db.js'
 
 // app.js собирает приложение Express: раздаёт страницу и отвечает на адреса API.
@@ -24,6 +24,15 @@ const NICKNAME = /^[A-Za-z0-9_]{3,20}$/
 // показывает текст error как есть. Все ожидаемые ошибки идут через неё, тексты в спеке.
 function fail(res, status, error) {
   return res.status(status).json({ error })
+}
+
+// resultFor(row, userId) это итог партии со стороны игрока userId: 'playing' партия идёт,
+// 'draw' ничья, 'win' победа, 'loss' поражение. Сдача это победа для одного и поражение
+// для другого, отдельного слова для неё нет: winner_id записан и при сдаче.
+function resultFor(row, userId) {
+  if (row.outcome === null) return 'playing'
+  if (row.outcome === 'draw') return 'draw'
+  return row.winner_id === userId ? 'win' : 'loss'
 }
 
 // gameView(row, userId) превращает строку партии из базы (результат findGame) в объект
@@ -232,7 +241,32 @@ function createApp(db) {
   // GET /leaderboard это общий рейтинг, токен не нужен: таблицу видно и до входа
   app.get('/leaderboard', (req, res) => res.json(leaderboard(db)))
 
-  // здесь в следующих задачах появятся остальные адреса API
+  // GET /profile отдаёт игроку его собственную статистику и 20 последних партий. Профиль
+  // виден только самому игроку, чужих профилей нет. req.user это строка из users, счётчики
+  // уже в ней. opponent это никнейм соперника: если игрок крестик, то нолик, и наоборот.
+  // moves это число ходов в истории, created это время создания партии в миллисекундах,
+  // браузер сам превратит его в дату.
+  app.get('/profile', requireUser, (req, res) => {
+    const user = req.user
+    const games = gamesOfUser(db, user.id).map((row) => ({
+      id: row.id,
+      N: row.N,
+      K: row.K,
+      opponent: row.x_id === user.id ? row.o_name : row.x_name,
+      result: resultFor(row, user.id),
+      moves: JSON.parse(row.history).length,
+      created: row.created_at,
+    }))
+
+    res.json({
+      nickname: user.nickname,
+      wins: user.wins,
+      draws: user.draws,
+      losses: user.losses,
+      points: user.wins * 3 + user.draws,
+      games,
+    })
+  })
 
   // обработчик ошибок стоит последним. У него четыре параметра, по этому Express
   // и отличает его от обычного обработчика. Express 5 сам ловит исключения в обработчиках

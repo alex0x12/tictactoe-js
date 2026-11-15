@@ -149,6 +149,17 @@ function setOpponent(db, id, userId) {
   db.prepare('UPDATE games SET o_id = ? WHERE id = ?').run(userId, id)
 }
 
+// gamesOfUser(db, userId) возвращает до 20 партий игрока от новых к старым, в том же виде,
+// что и findGame. Берутся партии, где он крестик или нолик и где уже есть соперник:
+// ждущие партии в список не попадают. rowid решает порядок, если две партии созданы
+// в одну миллисекунду. Нужна для профиля.
+function gamesOfUser(db, userId) {
+  return db.prepare(`${GAME_SELECT}
+    WHERE (games.x_id = ? OR games.o_id = ?) AND games.o_id IS NOT NULL
+    ORDER BY games.created_at DESC, games.rowid DESC
+    LIMIT 20`).all(userId, userId)
+}
+
 // saveMoves(db, id, history, outcome, winnerId) записывает ходы и итог партии id.
 // history приходит массивом, в базу уходит JSON-текстом. outcome это null, 'win', 'draw'
 // или 'resign', winnerId это id победителя или null.
@@ -192,5 +203,5 @@ export {
   openDb,
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
   insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
-  saveMoves, addResult, leaderboard,
+  gamesOfUser, saveMoves, addResult, leaderboard,
 }

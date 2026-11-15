@@ -378,3 +378,50 @@ test('в рейтинг не попадают те, кто ещё не игра�
   assert.equal(board.status, 200)
   assert.deepEqual(board.body, [])
 })
+
+// --- задача 5: профиль ---
+
+test('профиль: счётчики, очки и партии со своей стороны', async () => {
+  const { alex, masha, id } = await startPair()
+  for (const [token, cell] of [[alex, 0], [masha, 3], [alex, 1], [masha, 4], [alex, 2]]) {
+    await move(token, id, cell)
+  }
+  // вторая партия: masha ждёт, alex приходит, партия идёт
+  const second = await call('POST', '/games', { N: 5, K: 4 }, masha)
+  await call('POST', '/games', { N: 5, K: 4 }, alex)
+  // третья: alex ждёт друга, такая партия в профиль не попадает
+  await call('POST', '/games', { N: 7, K: 5, invite: true }, alex)
+  // чужая партия: в профиль alex не попадает
+  const petya = await signUp('petya')
+  const olga = await signUp('olga')
+  await call('POST', '/games', { N: 3, K: 3 }, petya)
+  await call('POST', '/games', { N: 3, K: 3 }, olga)
+
+  const res = await call('GET', '/profile', undefined, alex)
+  assert.equal(res.status, 200)
+  const { games, ...stats } = res.body
+  assert.deepEqual(stats, { nickname: 'alex', wins: 1, draws: 0, losses: 0, points: 3 })
+  assert.deepEqual(games.map((g) => [g.id, g.N, g.K, g.opponent, g.result, g.moves]), [
+    [second.body.id, 5, 4, 'masha', 'playing', 0],
+    [id, 3, 3, 'masha', 'win', 5],
+  ])
+  assert.equal(typeof games[0].created, 'number')
+  assert.ok(games[0].created >= games[1].created)
+
+  const her = await call('GET', '/profile', undefined, masha)
+  assert.deepEqual(her.body.games.map((g) => [g.opponent, g.result]), [
+    ['alex', 'playing'],
+    ['alex', 'loss'],
+  ])
+})
+
+test('профиль без токена 401, после выхода тоже', async () => {
+  assert.equal((await call('GET', '/profile')).status, 401)
+
+  const token = await signUp('alex')
+  const fresh = await call('GET', '/profile', undefined, token)
+  assert.deepEqual(fresh.body, { nickname: 'alex', wins: 0, draws: 0, losses: 0, points: 0, games: [] })
+
+  await call('POST', '/logout', undefined, token)
+  assert.equal((await call('GET', '/profile', undefined, token)).status, 401)
+})
