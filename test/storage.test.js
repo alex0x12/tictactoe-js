@@ -87,3 +87,7 @@ test('мусор в redo не проходит', () => {
   assert.deepEqual(validateAndRebuild(raw({ history: [0], redo: [4, 4] })).redo, [], 'повтор');
   assert.deepEqual(validateAndRebuild(raw({ history: [0, 3, 300], redo: [4] })).redo, [], 'история обрезана');
 });
+
+test('партия в режиме online в ttt.game не принимается', () => {
+  assert.equal(validateAndRebuild(raw({ mode: 'online' })), null);
+});

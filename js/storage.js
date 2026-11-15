@@ -1,7 +1,8 @@
 import { X, O } from './board.js';
 import { createGame, isLegal, applyMove, resign } from './game.js';
 
-// storage.js сохраняет в localStorage партию, настройки и статистику и читает их обратно.
+// storage.js сохраняет в localStorage партию, настройки, статистику, учётную запись
+// и номер партии по сети и читает их обратно.
 // Это единственный модуль, который трогает localStorage. Прочитанные оттуда данные могли
 // испортить старая версия кода, баг или правка руками в DevTools, поэтому они проверяются
 // перед использованием. Исключений наружу модуль не выпускает: если хранилище недоступно,
@@ -12,17 +13,25 @@ import { createGame, isLegal, applyMove, resign } from './game.js';
 // а не работают наполовину.
 const SCHEMA_VERSION = 1;
 
-// KEYS это имена ключей в localStorage. Ключей три, потому что у данных разный срок жизни:
+// KEYS это имена ключей в localStorage. Ключей пять, потому что у данных разный срок жизни:
 // партия заканчивается, настройки живут дольше партии, статистика дольше всего.
+// account это токен и никнейм после входа, он живёт до выхода из учётной записи.
+// online это номер текущей партии по сети. Сама такая партия лежит на сервере, тут только
+// номер, чтобы после F5 вернуться в неё.
 const KEYS = {
   settings: 'ttt.settings',
   game: 'ttt.game',
   stats: 'ttt.stats',
+  account: 'ttt.account',
+  online: 'ttt.online',
 };
 
 // MODES и DIFFICULTIES это допустимые значения режима и сложности,
 // по ним проверяются записи партии и настроек.
+// SETTINGS_MODES это режимы для настроек: к ним добавляется 'online'. Партия по сети
+// в ttt.game не пишется никогда, поэтому validateAndRebuild проверяет по MODES, без неё.
 const MODES = ['pvp', 'ai'];
+const SETTINGS_MODES = [...MODES, 'online'];
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
 
 // --- проверки значений ---
@@ -160,13 +169,14 @@ function removeKey(key) {
 
 // loadSettings() возвращает последние сохранённые настройки
 // { N, K, mode, difficulty, humanFirst, debug } или null, если их нет или они испорчены.
-// main.js ставит по ним ползунки, когда сохранённой партии нет.
+// main.js ставит по ним ползунки, когда сохранённой партии нет. Режим тут может быть
+// и 'online', это единственное место, где он проходит проверку.
 // humanFirst и debug становятся true только при точном true, строка или число не пройдут.
 function loadSettings() {
   const obj = readJSON(KEYS.settings);
   if (!isPlainObject(obj) || obj.v !== SCHEMA_VERSION) return null;
   if (!isIntInRange(obj.N, 3, 15) || !isIntInRange(obj.K, 3, obj.N)) return null;
-  if (!MODES.includes(obj.mode) || !DIFFICULTIES.includes(obj.difficulty)) return null;
+  if (!SETTINGS_MODES.includes(obj.mode) || !DIFFICULTIES.includes(obj.difficulty)) return null;
 
   return {
     N: obj.N,
@@ -204,6 +214,13 @@ function loadGame() {
   const game = validateAndRebuild(obj);
   if (game === null) removeKey(KEYS.game);
   return game;
+}
+
+// clearGame() удаляет сохранённую локальную партию. Зовётся, когда игрок переходит в режим
+// "По сети": локальная партия при этом пропадает, и после F5 она не вернётся поверх
+// партии по сети.
+function clearGame() {
+  removeKey(KEYS.game);
 }
 
 // saveGame(state) записывает партию. Пишутся только поля из схемы: cells и winLine
@@ -264,10 +281,57 @@ function recordResult(state, r) {
   writeJSON(KEYS.stats, stats);
 }
 
+// --- учётная запись и партия по сети ---
+
+// loadAccount() возвращает { token, nickname } игрока, который вошёл, или null, если
+// запись не найдена или испорчена. Токен браузер отправляет серверу с каждым запросом
+// к партиям. Зовётся из net.js перед каждым запросом и из main.js при загрузке страницы.
+// Запись хранит версию формата, как и остальные.
+function loadAccount() {
+  const obj = readJSON(KEYS.account);
+  if (!isPlainObject(obj) || obj.v !== SCHEMA_VERSION) return null;
+  if (typeof obj.token !== 'string' || typeof obj.nickname !== 'string') return null;
+  return { token: obj.token, nickname: obj.nickname };
+}
+
+// saveAccount({ token, nickname }) запоминает вошедшего игрока. Зовётся после входа
+// и регистрации.
+function saveAccount({ token, nickname }) {
+  writeJSON(KEYS.account, { v: SCHEMA_VERSION, token, nickname });
+}
+
+// clearAccount() забывает игрока. Зовётся при выходе и когда сервер ответил 401,
+// то есть токен больше не годится.
+function clearAccount() {
+  removeKey(KEYS.account);
+}
+
+// loadOnlineId() возвращает номер текущей партии по сети или null. Номер это 12 символов
+// из цифр и букв a-f, так сервер их и выдаёт. Всё остальное считается мусором, ведь значение
+// попадёт в адрес запроса.
+function loadOnlineId() {
+  const id = readJSON(KEYS.online);
+  return typeof id === 'string' && /^[0-9a-f]{12}$/.test(id) ? id : null;
+}
+
+// saveOnlineId(id) запоминает номер партии по сети. Зовётся из afterChange в main.js,
+// когда на экране партия с сервера.
+function saveOnlineId(id) {
+  writeJSON(KEYS.online, id);
+}
+
+// clearOnlineId() забывает номер партии по сети. Зовётся при выходе, при начале новой
+// партии и когда сервер не отдал партию, на которую указывал номер.
+function clearOnlineId() {
+  removeKey(KEYS.online);
+}
+
 export {
   SCHEMA_VERSION,
   validateAndRebuild,
   loadSettings, saveSettings,
-  loadGame, saveGame,
+  loadGame, saveGame, clearGame,
   loadStats, statsKey, recordResult,
+  loadAccount, saveAccount, clearAccount,
+  loadOnlineId, saveOnlineId, clearOnlineId,
 };
