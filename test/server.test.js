@@ -435,3 +435,22 @@ test('страницы рейтинга и профиля отдаются', asy
     assert.match(page.body, /<!DOCTYPE html>/i)
   }
 })
+
+// --- кэш браузера ---
+
+test('ответы API помечены no-store, а страница и скрипты нет', async () => {
+  const token = await signUp('alex')
+  const api = [
+    ['/leaderboard', {}],
+    ['/profile', { Authorization: `Bearer ${token}` }],
+    ['/games/000000000000', { Authorization: `Bearer ${token}` }],
+  ]
+  for (const [path, headers] of api) {
+    const res = await fetch(base + path, { headers })
+    assert.equal(res.headers.get('cache-control'), 'no-store', path)
+  }
+  for (const path of ['/', '/js/game.js']) {
+    const res = await fetch(base + path)
+    assert.notEqual(res.headers.get('cache-control'), 'no-store', path)
+  }
+})
