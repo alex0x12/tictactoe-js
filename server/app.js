@@ -63,11 +63,14 @@ function createApp(db) {
   // express.json() разбирает тело запроса из JSON в req.body
   app.use(express.json())
 
-  // отдаём только то, что нужно странице. Папку src целиком отдавать нельзя:
+  // отдаём только то, что нужно страницам: три страницы (игра, рейтинг, профиль), папку js
+  // и папку css, каждую явно. Папку src целиком отдавать нельзя:
   // тогда любой скачал бы server/ttt.db с хешами паролей
   app.use('/js', express.static(join(root, 'js')))
   app.use('/css', express.static(join(root, 'css')))
   app.get('/', (req, res) => res.sendFile(join(root, 'index.html')))
+  app.get('/rating.html', (req, res) => res.sendFile(join(root, 'rating.html')))
+  app.get('/profile.html', (req, res) => res.sendFile(join(root, 'profile.html')))
 
   // requireUser(req, res, next) это посредник для адресов, куда нужен вход. Достаёт токен
   // из заголовка "Authorization: Bearer ...", ищет его в таблице и кладёт игрока в req.user,

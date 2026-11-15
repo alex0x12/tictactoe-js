@@ -231,7 +231,9 @@ function setCursor(root, i) {
 
 // renderAccount(account, state, panel) обновляет блок "Игра по сети" на левой панели,
 // panel это сам блок .online-only. Пока игрок не вошёл, видна форма входа, после входа
-// строка "Вы: alex" и кнопки. account это { token, nickname } или null.
+// строка "Вы: alex", где никнейм это ссылка на страницу профиля, и кнопки выбора соперника.
+// Статистики и списка партий здесь нет, они на странице профиля. account это
+// { token, nickname } или null.
 // Поле со ссылкой для друга видно, пока партия по приглашению ждёт соперника: ссылку
 // собираем из адреса страницы и номера партии. В повторе ссылка не нужна.
 // online это партия по сети, если она на экране, waiting говорит, что она ждёт друга.
@@ -246,56 +248,6 @@ function renderAccount(account, state, panel) {
   const waiting = Boolean(online && online.invite && online.o === null)
   panel.querySelector('.invite').hidden = !waiting
   if (waiting) panel.querySelector('.invite-link').value = `${location.origin}/?game=${online.id}`
-}
-
-// RESULT_WORDS это итог партии словом для списка "Мои партии". Цвет точки дублируется
-// словом, потому что красный и зелёный легко спутать.
-const RESULT_WORDS = { playing: 'идёт', win: 'победа', loss: 'поражение', draw: 'ничья' }
-
-// renderProfile(profile, panel) показывает строку статистики и список "Мои партии" внутри
-// блока "Игра по сети" на левой панели, panel это .online-only. profile это ответ getProfile
-// или null, если игрок не вошёл: тогда всё очищается. Каждая партия это кнопка, поэтому до
-// неё можно дойти клавишей Tab и нажать Enter. В кнопке цветная точка, итог словом и описание
-// вида "3x3, K=3, против masha, ходов: 7, 15.11.2026". Число из game.created это время
-// в миллисекундах, браузер сам превращает его в дату. Никнейм соперника попадает на страницу
-// только через append и textContent, не через innerHTML. Номер партии кладём в data-id, по
-// нему main.js узнаёт, какую партию открыть.
-// dot это точка, button это кнопка партии, item это строка списка.
-function renderProfile(profile, panel) {
-  const stats = panel.querySelector('.stats')
-  const list = panel.querySelector('.my-games')
-  list.replaceChildren()
-
-  if (profile === null) {
-    stats.textContent = ''
-    return
-  }
-
-  stats.textContent = `Победы ${profile.wins}, ничьи ${profile.draws}, `
-    + `поражения ${profile.losses}, очки ${profile.points}`
-
-  for (const game of profile.games) {
-    const dot = document.createElement('span')
-    dot.className = `dot ${game.result}`
-
-    const date = new Date(game.created).toLocaleDateString('ru-RU')
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'game-item'
-    button.dataset.id = game.id
-    button.append(dot, `${RESULT_WORDS[game.result]}, ${game.N}x${game.N}, K=${game.K}, `
-      + `против ${game.opponent}, ходов: ${game.moves}, ${date}`)
-
-    const item = document.createElement('li')
-    item.append(button)
-    list.append(item)
-  }
-
-  if (profile.games.length === 0) {
-    const empty = document.createElement('li')
-    empty.textContent = 'Партий пока нет'
-    list.append(empty)
-  }
 }
 
 // renderReplay(state, bar) показывает или прячет полосу повтора под полем, bar это .replay.
@@ -314,35 +266,6 @@ function renderReplay(state, bar) {
   bar.querySelector('.btn-forward').disabled = state.redo.length === 0
 }
 
-// renderLeaderboard(rows, panel) рисует таблицу рейтинга в правой панели.
-// rows это список строк { nickname, wins, draws, losses, points } из getLeaderboard
-// или null, если сервер не ответил. Таблица строится заново целиком, строк не больше
-// двадцати. Вместо таблицы может быть пояснение: note это строка под ней.
-// tr это строка таблицы, value это значение одной ячейки.
-function renderLeaderboard(rows, panel) {
-  const table = panel.querySelector('.leaderboard')
-  const note = panel.querySelector('.leaderboard-note')
-  const body = table.tBodies[0]
-  body.replaceChildren()
-
-  if (rows === null || rows.length === 0) {
-    table.hidden = true
-    note.hidden = false
-    note.textContent = rows === null ? 'Рейтинг недоступен' : 'Пока никто не играл по сети'
-    return
-  }
-
-  table.hidden = false
-  note.hidden = true
-  for (const row of rows) {
-    const tr = body.insertRow()
-    for (const value of [row.nickname, row.wins, row.draws, row.losses, row.points]) {
-      tr.insertCell().textContent = value
-    }
-  }
-}
-
 export {
-  renderBoard, renderStatus, renderScore, renderAccount, renderProfile, renderReplay,
-  renderLeaderboard, setCursor,
+  renderBoard, renderStatus, renderScore, renderAccount, renderReplay, setCursor,
 }

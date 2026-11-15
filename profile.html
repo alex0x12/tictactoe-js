@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Профиль: крестики-нолики</title>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Крестики-нолики</h1>
+    <nav class="app-nav" aria-label="Разделы">
+      <a href="/">Игра</a>
+      <a href="/rating.html">Рейтинг</a>
+      <a href="/profile.html" aria-current="page">Профиль</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    <section class="panel profile" aria-label="Профиль">
+      <h2>Профиль</h2>
+
+      <p class="logged-out" hidden>
+        Вы не вошли. Войти можно на <a href="/">странице игры</a> в режиме "По сети".
+      </p>
+
+      <div class="account" hidden>
+        <p>Вы: <b class="nickname"></b> <button type="button" class="btn-logout">Выйти</button></p>
+        <p class="stats"></p>
+        <h3>Мои партии</h3>
+        <ul class="my-games"></ul>
+      </div>
+
+      <p class="profile-error" role="alert"></p>
+    </section>
+  </main>
+
+  <script type="module" src="./js/profile.js"></script>
+</body>
+</html>

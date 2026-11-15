@@ -15,7 +15,11 @@ body {
   background: #f3f5f9;
 }
 
+/* Шапка это строка: заголовок слева, меню рядом */
 .app-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
   padding: 12px 20px;
   background: #1c2230;
   color: #fff;
@@ -25,6 +29,35 @@ body {
   margin: 0;
   font-size: 20px;
   letter-spacing: 2px;
+}
+
+.app-nav {
+  display: flex;
+  gap: 16px;
+}
+
+.app-nav a {
+  color: #c7cedb;
+  text-decoration: none;
+}
+
+.app-nav a:hover {
+  color: #fff;
+  text-decoration: underline;
+}
+
+/* текущая страница: белая и подчёркнута */
+.app-nav a[aria-current="page"] {
+  color: #fff;
+  font-weight: 600;
+  border-bottom: 2px solid #fff;
+}
+
+/* страницы рейтинга и профиля: одна панель по центру */
+.page {
+  max-width: 640px;
+  margin: 24px auto;
+  padding: 0 16px;
 }
 
 /* Три колонки: параметры | поле | статус */
@@ -196,7 +229,8 @@ body {
   width: 100%;
 }
 
-.online-only button {
+.online-only button,
+.profile button {
   margin: 6px 6px 0 0;
   padding: 6px 10px;
   font: inherit;
@@ -208,23 +242,25 @@ body {
   cursor: pointer;
 }
 
-.online-only button:hover {
+.online-only button:hover,
+.profile button:hover {
   background: #eef2fb;
 }
 
-.online-only .stats {
+.profile .stats {
   margin: 8px 0;
   font-size: 13px;
   color: #5a6478;
 }
 
-.online-only h3 {
+.profile h3 {
   margin: 16px 0 6px;
   font-size: 13px;
   color: #5a6478;
 }
 
-.online-error {
+.online-error,
+.profile-error {
   min-height: 1.2em;
   margin: 8px 0 0;
   font-size: 13px;
@@ -263,22 +299,31 @@ body {
   color: #5a6478;
 }
 
-/* Мои партии: список кнопок, у каждой цветная точка с итогом */
+/* Мои партии на странице профиля: список ссылок, у каждой цветная точка с итогом */
 .my-games {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 15rem;
-  overflow-y: auto;
 }
 
-.online-only .game-item {
+/* ссылка выглядит как карточка: без подчёркивания и синего цвета ссылки, подсветка при
+наведении, а рамку фокуса при переходе клавишей Tab оставляет сам браузер */
+.profile .game-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  width: 100%;
   margin: 4px 0 0;
-  text-align: left;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: #1c2230;
+  text-decoration: none;
+  background: #fff;
+  border: 1px solid #c7cedb;
+  border-radius: 6px;
+}
+
+.profile .game-item:hover {
+  background: #eef2fb;
 }
 
 .dot {

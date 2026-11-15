@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Рейтинг: крестики-нолики</title>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Крестики-нолики</h1>
+    <nav class="app-nav" aria-label="Разделы">
+      <a href="/">Игра</a>
+      <a href="/rating.html" aria-current="page">Рейтинг</a>
+      <a href="/profile.html">Профиль</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    <section class="panel rating" aria-label="Рейтинг">
+      <h2>Рейтинг</h2>
+      <table class="leaderboard" hidden>
+        <thead><tr><th>Игрок</th><th>Победы</th><th>Ничьи</th><th>Поражения</th><th>Очки</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="leaderboard-note"></p>
+    </section>
+  </main>
+
+  <script type="module" src="./js/rating.js"></script>
+</body>
+</html>

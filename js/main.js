@@ -1,8 +1,7 @@
 import { rowOf, colOf, opponent } from './board.js'
 import { createGame, currentPlayer, isLegal, applyMove, undo, redo, resign } from './game.js'
 import {
-  renderBoard, renderStatus, renderScore, renderAccount, renderProfile, renderReplay,
-  renderLeaderboard, setCursor,
+  renderBoard, renderStatus, renderScore, renderAccount, renderReplay, setCursor,
 } from './ui.js'
 import {
   loadSettings, saveSettings, loadGame, saveGame, clearGame, loadStats, statsKey, recordResult,
@@ -10,8 +9,8 @@ import {
 } from './storage.js'
 import { chooseMove } from './ai.js'
 import {
-  register, login, logout, getLeaderboard, getProfile, newGame, joinGame, getGame, sendMove,
-  sendResign, fromServer, replayFromServer,
+  register, login, newGame, joinGame, getGame, sendMove, sendResign, fromServer,
+  replayFromServer,
 } from './net.js'
 
 // main.js это точка входа. Тут сходятся модель партии из game.js, отрисовка из ui.js,
@@ -22,7 +21,7 @@ import {
 // boardElement это поле, statusElement правая панель, дальше ползунки и их подписи.
 // aiOptions это группы "Сложность" и "Кто ходит первым", они нужны только против ИИ.
 // onlineElement это блок "Игра по сети" на левой панели, loginForm форма входа внутри него.
-// replayElement это полоса повтора под полем, myGamesElement список "Мои партии".
+// replayElement это полоса повтора под полем.
 const boardElement = document.getElementById('board')
 const statusElement = document.getElementById('status')
 const sizeInput = document.getElementById('size')
@@ -33,7 +32,6 @@ const aiOptions = document.querySelectorAll('.ai-only')
 const onlineElement = document.querySelector('.online-only')
 const loginForm = document.querySelector('.login-form')
 const replayElement = document.querySelector('.replay')
-const myGamesElement = document.querySelector('.my-games')
 
 // state это текущая партия, объект GameState из game.js. Единственный источник истины,
 // DOM только отражает его и правил не решает.
@@ -368,10 +366,13 @@ for (const radio of document.querySelectorAll('.params input[type="radio"]')) {
 // saved это партия из хранилища или null, settings это настройки или null,
 // invited это id из ?game= или null, onlineId это id партии по сети или null.
 function restoreOrStart() {
-  // 1. пришли по ссылке-приглашению. Переход по ней уже говорит, чего хочет игрок,
+  // 1. пришли по ссылке ?game=. Она приходит от друга как приглашение или из списка
+  // "Мои партии" на странице профиля. Переход по ней уже говорит, чего хочет игрок,
   // поэтому режим "По сети" включается без вопроса. Локальная партия при этом удаляется,
   // как при любом переходе в этот режим. ?game убираем из адреса, чтобы F5 не заходил
-  // по ссылке снова. window.history написано полностью, чтобы не путать с state.history
+  // по ссылке снова. Дальше joinById: идущая партия показывается живой, своя законченная
+  // повтором, чужая даёт ошибку сервера. window.history написано полностью, чтобы
+  // не путать с state.history
   const invited = new URLSearchParams(location.search).get('game')
   if (invited !== null) {
     window.history.replaceState(null, '', location.pathname)
@@ -421,41 +422,16 @@ function showError(text) {
 // handleError(error) разбирает ошибку запроса к серверу. 401 на запрос с токеном значит,
 // что токен больше не годится, например базу удалили: забываем его и просим войти заново.
 // Если на экране была партия по сети, она уже недоступна, поэтому начинаем с пустого поля.
-// Локальную партию при этом не трогаем. Список "Мои партии" и статистика пропадают вместе
-// с учётной записью. Остальные ошибки просто показываем.
+// Локальную партию при этом не трогаем. Остальные ошибки просто показываем.
 function handleError(error) {
   if (error.status === 401) {
     clearAccount()
-    renderProfile(null, onlineElement)
     if (state.mode === 'online') startGame()
     else draw()
     showError('Войдите заново')
     return
   }
   showError(error.message)
-}
-
-// refreshLists() перезагружает рейтинг, а у вошедшего игрока ещё и профиль: статистику
-// и список "Мои партии". Зовётся при загрузке страницы, после входа, когда в партии по сети
-// появился соперник и когда она закончилась. Если сервер не ответил, вместо таблицы пишется
-// "Рейтинг недоступен", игре это не мешает. Рейтинг и профиль грузятся отдельно, чтобы
-// сбой одного не убирал второй.
-async function refreshLists() {
-  try {
-    renderLeaderboard(await getLeaderboard(), statusElement)
-  } catch {
-    renderLeaderboard(null, statusElement)
-  }
-
-  if (!loadAccount()) {
-    renderProfile(null, onlineElement)
-    return
-  }
-  try {
-    renderProfile(await getProfile(), onlineElement)
-  } catch (error) {
-    handleError(error)
-  }
 }
 
 // startPolling() запускает опрос: раз в секунду pollTick спрашивает сервер о партии.
@@ -494,19 +470,13 @@ function showOnlineGame(view) {
 // можно, только когда на экране та же партия (state.online.id === view.id) и это не повтор:
 // это проверяют вызывающие. Курсор клавиатуры сохраняется, он относится к экрану.
 // Новый ответ приходит без online.offline, поэтому "Нет связи с сервером" пропадает сам.
-// before это то, что было на экране до замены. Если соперник пришёл или партия закончилась,
-// обновились рейтинг и список партий, поэтому их перезагружаем.
+// Когда партия закончилась, опрос останавливается.
 function applyView(view) {
-  const before = state.online
   const cursor = state.cursor
   state = fromServer(view)
   state.cursor = cursor
   afterChange()
   if (state.outcome !== null) stopPolling()
-
-  const joined = before.o === null && view.o !== null
-  const finished = before.outcome === null && view.outcome !== null
-  if (joined || finished) refreshLists()
 }
 
 // pollTick() это один такт опроса. Он идёт и в свою очередь игрока: соперник может сдаться,
@@ -598,15 +568,13 @@ async function resignOnline() {
 
 // startOnline(invite) начинает партию по сети с N и K с ползунков. invite равен false для
 // случайного соперника и true для приглашения. Зовётся кнопками "Случайный соперник"
-// и "Пригласить друга". Если соперник нашёлся сразу, он уже в партии: рейтинг и список
-// партий тоже обновляем.
+// и "Пригласить друга".
 async function startOnline(invite) {
   const { N, K } = readSettings()
   try {
     const view = await newGame(N, K, invite)
     showError('')
     showOnlineGame(view)
-    if (view.o !== null) refreshLists()
   } catch (error) {
     handleError(error)
   }
@@ -615,15 +583,19 @@ async function startOnline(invite) {
 document.querySelector('.btn-random').addEventListener('click', () => startOnline(false))
 document.querySelector('.btn-invite').addEventListener('click', () => startOnline(true))
 
-// joinById(id) входит в партию по пригласительной ссылке. Сначала pendingJoin сбрасывается,
-// чтобы после входа не принимать то же приглашение второй раз.
+// joinById(id) открывает партию по ссылке ?game=. Такая ссылка приходит из двух мест: от
+// друга как приглашение и из списка "Мои партии" на странице профиля. Сервер на join отдаёт
+// партию и тому, кто в ней уже играет, поэтому оба случая идут одним путём. Идущая партия
+// показывается живой, а своя законченная повтором. Чужая партия даёт ошибку сервера
+// "В партии уже два игрока". Сначала pendingJoin сбрасывается, чтобы после входа не открывать
+// ту же ссылку второй раз.
 async function joinById(id) {
   pendingJoin = null
   try {
     const view = await joinGame(id)
     showError('')
-    showOnlineGame(view)
-    refreshLists()
+    if (view.outcome !== null) openReplay(view)
+    else showOnlineGame(view)
   } catch (error) {
     handleError(error)
   }
@@ -667,23 +639,7 @@ loginForm.addEventListener('submit', async (event) => {
   loginForm.reset()
   showError('')
   draw()
-  refreshLists()
   if (pendingJoin) joinById(pendingJoin)
-})
-
-// Выход. Если сервер не ответил, из учётной записи выходим всё равно: токен забывает
-// браузер, а на сервере он останется лежать, но без него им уже никто не воспользуется.
-// Потом начинается пустое поле, партия по сети на экране больше не нужна.
-document.querySelector('.btn-logout').addEventListener('click', async () => {
-  try {
-    await logout()
-  } catch {
-    // сервер мог не ответить, из учётной записи выходим всё равно
-  }
-  clearAccount()
-  showError('')
-  startGame()
-  refreshLists()
 })
 
 // --- повтор ---
@@ -758,25 +714,6 @@ replayElement.querySelector('.btn-forward').addEventListener('click', () => step
 replayElement.querySelector('.btn-play').addEventListener('click', togglePlay)
 replayElement.querySelector('.btn-close').addEventListener('click', startGame)
 
-// Клик по строке списка "Мои партии": один слушатель на весь список, нужную строку находим
-// от места клика, как и на поле. Партию заново читаем с сервера, в списке есть только
-// краткие данные. Идущая партия открывается как живая, с опросом: так можно вернуться
-// в неё после выхода из учётной записи или после смены ползунков. Законченная открывается
-// повтором. item это найденная строка.
-myGamesElement.addEventListener('click', async (event) => {
-  const item = event.target.closest('.game-item')
-  if (!item) return
-  try {
-    const view = await getGame(item.dataset.id)
-    showError('')
-    if (view.outcome === null) showOnlineGame(view)
-    else openReplay(view)
-  } catch (error) {
-    handleError(error)
-  }
-})
-
 // --- запуск ---
 
 restoreOrStart()
-refreshLists()

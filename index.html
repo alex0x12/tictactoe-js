@@ -9,6 +9,11 @@
 <body>
   <header class="app-header">
     <h1>Крестики-нолики</h1>
+    <nav class="app-nav" aria-label="Разделы">
+      <a href="/" aria-current="page">Игра</a>
+      <a href="/rating.html">Рейтинг</a>
+      <a href="/profile.html">Профиль</a>
+    </nav>
   </header>
 
   <main class="layout">
@@ -54,13 +59,10 @@
         </form>
 
         <div class="account" hidden>
-          <p>Вы: <b class="nickname"></b> <button type="button" class="btn-logout">Выйти</button></p>
-          <p class="stats"></p>
+          <p>Вы: <a class="nickname" href="/profile.html"></a></p>
           <button type="button" class="btn-random">Случайный соперник</button>
           <button type="button" class="btn-invite">Пригласить друга</button>
           <label class="invite" hidden>Ссылка для друга <input class="invite-link" readonly></label>
-          <h3>Мои партии</h3>
-          <ul class="my-games"></ul>
         </div>
 
         <p class="online-error" role="alert"></p>
@@ -95,13 +97,6 @@
         <button type="button" class="btn-resign">⚑ Сдаться</button>
       </div>
       <p class="score"></p>
-
-      <h2>Рейтинг</h2>
-      <table class="leaderboard" hidden>
-        <thead><tr><th>Игрок</th><th>П</th><th>Н</th><th>Пр</th><th>Очки</th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p class="leaderboard-note"></p>
     </aside>
   </main>
 

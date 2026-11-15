@@ -425,3 +425,13 @@ test('профиль без токена 401, после выхода тоже',
   await call('POST', '/logout', undefined, token)
   assert.equal((await call('GET', '/profile', undefined, token)).status, 401)
 })
+
+// --- задача 11: страницы рейтинга и профиля ---
+
+test('страницы рейтинга и профиля отдаются', async () => {
+  for (const path of ['/rating.html', '/profile.html']) {
+    const page = await call('GET', path)
+    assert.equal(page.status, 200, path)
+    assert.match(page.body, /<!DOCTYPE html>/i)
+  }
+})
