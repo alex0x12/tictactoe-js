@@ -71,6 +71,15 @@
     <!-- В центре: поле -->
     <section class="board-area">
       <div id="board" class="board" role="grid" aria-label="Игровое поле"></div>
+
+      <!-- Полоса повтора партии, видна только во время повтора -->
+      <div class="replay" hidden>
+        <button type="button" class="btn-back">Назад</button>
+        <button type="button" class="btn-play">Пуск</button>
+        <button type="button" class="btn-forward">Вперёд</button>
+        <span class="replay-step"></span>
+        <button type="button" class="btn-close">Закрыть</button>
+      </div>
     </section>
 
     <!-- Справа: статус и управление -->

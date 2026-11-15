@@ -1,7 +1,8 @@
 import { rowOf, colOf, opponent } from './board.js'
 import { createGame, currentPlayer, isLegal, applyMove, undo, redo, resign } from './game.js'
 import {
-  renderBoard, renderStatus, renderScore, renderAccount, renderLeaderboard, setCursor,
+  renderBoard, renderStatus, renderScore, renderAccount, renderProfile, renderReplay,
+  renderLeaderboard, setCursor,
 } from './ui.js'
 import {
   loadSettings, saveSettings, loadGame, saveGame, clearGame, loadStats, statsKey, recordResult,
@@ -9,8 +10,8 @@ import {
 } from './storage.js'
 import { chooseMove } from './ai.js'
 import {
-  register, login, logout, getLeaderboard, newGame, joinGame, getGame, sendMove, sendResign,
-  fromServer,
+  register, login, logout, getLeaderboard, getProfile, newGame, joinGame, getGame, sendMove,
+  sendResign, fromServer, replayFromServer,
 } from './net.js'
 
 // main.js это точка входа. Тут сходятся модель партии из game.js, отрисовка из ui.js,
@@ -21,6 +22,7 @@ import {
 // boardElement это поле, statusElement правая панель, дальше ползунки и их подписи.
 // aiOptions это группы "Сложность" и "Кто ходит первым", они нужны только против ИИ.
 // onlineElement это блок "Игра по сети" на левой панели, loginForm форма входа внутри него.
+// replayElement это полоса повтора под полем, myGamesElement список "Мои партии".
 const boardElement = document.getElementById('board')
 const statusElement = document.getElementById('status')
 const sizeInput = document.getElementById('size')
@@ -30,6 +32,8 @@ const winValue = document.getElementById('win-value')
 const aiOptions = document.querySelectorAll('.ai-only')
 const onlineElement = document.querySelector('.online-only')
 const loginForm = document.querySelector('.login-form')
+const replayElement = document.querySelector('.replay')
+const myGamesElement = document.querySelector('.my-games')
 
 // state это текущая партия, объект GameState из game.js. Единственный источник истины,
 // DOM только отражает его и правил не решает.
@@ -39,11 +43,12 @@ let state
 // true, пока запрос опроса ещё не вернулся: при медленной сети запросы иначе накладывались
 // бы друг на друга. sending равен true, пока свой ход летит на сервер. pendingJoin это id
 // из ?game=, если по ссылке пришёл ещё не вошедший игрок: принять приглашение он сможет
-// после входа.
+// после входа. replayTimer это id setInterval проигрывания повтора или null.
 let pollTimer = null
 let pollBusy = false
 let sending = false
 let pendingJoin = null
+let replayTimer = null
 
 // checkedValue(name) возвращает value выбранной радиокнопки из группы name.
 function checkedValue(name) {
@@ -88,8 +93,8 @@ function createNewGame() {
   return game
 }
 
-// draw() перерисовывает всё, что зависит от состояния: поле, панель статуса, счёт и блок
-// входа. Её зовёт afterChange, а в разделе про сеть ещё и обработчики, которые меняют только
+// draw() перерисовывает всё, что зависит от состояния: поле, панель статуса, счёт, блок
+// входа и полосу повтора. Её зовёт afterChange, а в разделе про сеть ещё и обработчики, которые меняют только
 // вид страницы: вход и выход. Счёт читается из хранилища при каждой перерисовке, это дёшево,
 // а результат только что законченной партии уже записан. Учётная запись читается так же:
 // account это { token, nickname } или null, если игрок не вошёл.
@@ -99,6 +104,7 @@ function draw() {
   renderStatus(state, statusElement, account)
   renderScore(state, loadStats().items[statsKey(state)], statusElement)
   renderAccount(account, state, onlineElement)
+  renderReplay(state, replayElement)
 }
 
 // humanResult(state) переводит исход законченной партии в результат со стороны человека:
@@ -145,12 +151,13 @@ function afterChange() {
 // Зовётся по кнопке "Новая партия", при смене параметров и при загрузке страницы,
 // если сохранённой партии нет. Если первым ходит ИИ, в конце запрашиваем его ход.
 // debug всегда false: отладочной панели в упрощённой версии нет.
-// Новая партия останавливает опрос и забывает партию по сети: номер из ttt.online
+// Новая партия останавливает опрос и повтор и забывает партию по сети: номер из ttt.online
 // стирается. В режиме "По сети" создаётся пустое поле, без state.online, партия появится
 // после кнопки слева. Локальная партия при переходе в этот режим удаляется, иначе после F5
 // она вернулась бы поверх.
 function startGame() {
   stopPolling()
+  stopReplay()
   clearOnlineId()
   state = createNewGame()
   saveSettings({ ...settingsOf(state), debug: false })
@@ -193,8 +200,10 @@ function makeAiMove() {
 // через isLegal, а не из DOM. Иначе клик по клетке, которая в модели уже занята, но на
 // экране ещё пустая, поставил бы второй камень поверх чужого.
 // Пока ходит ИИ, клики игнорируются. После хода человека запрашиваем ответ ИИ.
-// В режиме "По сети" ход идёт через сервер, его делает playOnline.
+// В режиме "По сети" ход идёт через сервер, его делает playOnline. Во время повтора
+// клики по полю ничего не делают.
 function play(i) {
+  if (state.replay) return
   if (state.mode === 'online') {
     playOnline(i)
     return
@@ -324,8 +333,9 @@ winInput.addEventListener('input', refreshOutputs)
 // в history посчитаны по старому N, а режим и сложность фиксируются на старте партии.
 // Поэтому любое изменение начинает новую партию, а если ходы уже сделаны, сначала
 // спрашиваем. При отказе панель возвращается к параметрам текущей партии.
+// Повтор закрывается без вопроса: терять в нём нечего.
 function applySettings() {
-  if (state.history.length > 0 && !confirm('Начать новую партию с новыми настройками?')) {
+  if (state.history.length > 0 && !state.replay && !confirm('Начать новую партию с новыми настройками?')) {
     showSettings(settingsOf(state))
     return
   }
@@ -411,10 +421,12 @@ function showError(text) {
 // handleError(error) разбирает ошибку запроса к серверу. 401 на запрос с токеном значит,
 // что токен больше не годится, например базу удалили: забываем его и просим войти заново.
 // Если на экране была партия по сети, она уже недоступна, поэтому начинаем с пустого поля.
-// Локальную партию при этом не трогаем. Остальные ошибки просто показываем.
+// Локальную партию при этом не трогаем. Список "Мои партии" и статистика пропадают вместе
+// с учётной записью. Остальные ошибки просто показываем.
 function handleError(error) {
   if (error.status === 401) {
     clearAccount()
+    renderProfile(null, onlineElement)
     if (state.mode === 'online') startGame()
     else draw()
     showError('Войдите заново')
@@ -423,14 +435,26 @@ function handleError(error) {
   showError(error.message)
 }
 
-// refreshLists() перезагружает рейтинг. Зовётся при загрузке страницы, после входа и
-// после конца партии по сети. Если сервер не ответил, вместо таблицы пишется "Рейтинг
-// недоступен", игре это не мешает.
+// refreshLists() перезагружает рейтинг, а у вошедшего игрока ещё и профиль: статистику
+// и список "Мои партии". Зовётся при загрузке страницы, после входа, когда в партии по сети
+// появился соперник и когда она закончилась. Если сервер не ответил, вместо таблицы пишется
+// "Рейтинг недоступен", игре это не мешает. Рейтинг и профиль грузятся отдельно, чтобы
+// сбой одного не убирал второй.
 async function refreshLists() {
   try {
     renderLeaderboard(await getLeaderboard(), statusElement)
   } catch {
     renderLeaderboard(null, statusElement)
+  }
+
+  if (!loadAccount()) {
+    renderProfile(null, onlineElement)
+    return
+  }
+  try {
+    renderProfile(await getProfile(), onlineElement)
+  } catch (error) {
+    handleError(error)
   }
 }
 
@@ -450,8 +474,9 @@ function stopPolling() {
 // view это ответ сервера. Панель встаёт на N и K партии, а не на то, что стояло на
 // ползунках: друг мог позвать на 15x15, а ползунки показывали 3x3. Режим "По сети"
 // запоминается в настройках, локальная партия удаляется, как при любом входе в этот режим.
-// settings это новые настройки панели.
+// Если до этого шёл повтор, он останавливается. settings это новые настройки панели.
 function showOnlineGame(view) {
+  stopReplay()
   const settings = { ...readSettings(), N: view.N, K: view.K, mode: 'online' }
   showSettings(settings)
   saveSettings({ ...settings, debug: false })
@@ -659,6 +684,96 @@ document.querySelector('.btn-logout').addEventListener('click', async () => {
   showError('')
   startGame()
   refreshLists()
+})
+
+// --- повтор ---
+
+// openReplay(view) открывает повтор законченной партии, view это ответ сервера о ней.
+// Опрос и прежний повтор останавливаются, номер партии по сети забывается: повтор после
+// F5 не возвращается. Панель ставится на N и K партии и режим 'online'. settingsOf(state)
+// тут не годится: у повтора режим 'pvp', и панель переключилась бы на "Два игрока".
+// Повтор никогда не пишется в ttt.game и не проходит через afterChange с записью:
+// здесь и в обработчиках ниже зовётся draw напрямую, а afterChange для повтора только рисует.
+// settings это новые настройки панели.
+function openReplay(view) {
+  stopPolling()
+  stopReplay()
+  clearOnlineId()
+  const settings = { ...readSettings(), N: view.N, K: view.K, mode: 'online' }
+  showSettings(settings)
+  saveSettings({ ...settings, debug: false })
+  clearGame()
+
+  state = replayFromServer(view)
+  state.cursor = 0
+  draw()
+}
+
+// stopReplay() останавливает проигрывание повтора и сбрасывает флаг replay.playing,
+// по которому кнопка называется "Пуск" или "Пауза". state?. нужен потому, что startGame
+// зовёт stopReplay ещё до первой партии, когда state пуст.
+function stopReplay() {
+  clearInterval(replayTimer)
+  replayTimer = null
+  if (state?.replay) state.replay.playing = false
+}
+
+// stepReplay(forward) делает один шаг повтора: вперёд это redo, назад это undo. Шаг вручную
+// ставит проигрывание на паузу. Дальше перерисовываем экран, поле и счётчик берутся из state.
+function stepReplay(forward) {
+  stopReplay()
+  if (forward) redo(state)
+  else undo(state)
+  draw()
+}
+
+// togglePlay() запускает проигрывание или ставит его на паузу. Проигрывание это redo
+// раз в секунду, когда ходы кончились, оно останавливается само. Если нажать "Пуск"
+// на последнем ходе, повтор сначала отматывается в начало: undo в режиме 'pvp' снимает
+// по одному полуходу, пока история не опустеет.
+function togglePlay() {
+  if (state.replay.playing) {
+    stopReplay()
+    draw()
+    return
+  }
+
+  if (state.redo.length === 0) {
+    while (undo(state) > 0) {
+      // снимаем по полуходу, пока история не опустеет
+    }
+  }
+
+  state.replay.playing = true
+  replayTimer = setInterval(() => {
+    redo(state)
+    if (state.redo.length === 0) stopReplay()
+    draw()
+  }, 1000)
+  draw()
+}
+
+replayElement.querySelector('.btn-back').addEventListener('click', () => stepReplay(false))
+replayElement.querySelector('.btn-forward').addEventListener('click', () => stepReplay(true))
+replayElement.querySelector('.btn-play').addEventListener('click', togglePlay)
+replayElement.querySelector('.btn-close').addEventListener('click', startGame)
+
+// Клик по строке списка "Мои партии": один слушатель на весь список, нужную строку находим
+// от места клика, как и на поле. Партию заново читаем с сервера, в списке есть только
+// краткие данные. Идущая партия открывается как живая, с опросом: так можно вернуться
+// в неё после выхода из учётной записи или после смены ползунков. Законченная открывается
+// повтором. item это найденная строка.
+myGamesElement.addEventListener('click', async (event) => {
+  const item = event.target.closest('.game-item')
+  if (!item) return
+  try {
+    const view = await getGame(item.dataset.id)
+    showError('')
+    if (view.outcome === null) showOnlineGame(view)
+    else openReplay(view)
+  } catch (error) {
+    handleError(error)
+  }
 })
 
 // --- запуск ---

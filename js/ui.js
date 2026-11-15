@@ -88,6 +88,9 @@ function resultText(outcome, iWon) {
 // online это данные сервера о партии, mine и rival это никнеймы игрока и его соперника,
 // p это сторона, чей сейчас ход. lines это две готовые строки.
 // Если опрос не дошёл до сервера (online.offline), вторая строка сообщает об этом.
+// Повтор идёт первым: у него режим 'pvp', и без этой ветки он показался бы обычной партией
+// вдвоём. Итог в повторе берётся из ответа сервера (online.outcome), а не из state.outcome,
+// который меняется с каждым шагом.
 function onlineLines(state, account) {
   const online = state.online
   if (!online) {
@@ -96,6 +99,12 @@ function onlineLines(state, account) {
 
   const mine = online.you === X ? online.x : online.o
   const rival = online.you === X ? online.o : online.x
+
+  if (state.replay) {
+    const result = resultText(online.outcome, online.winner === mine).toLowerCase()
+    return ['Повтор партии', `Итог: ${result}`]
+  }
+
   const p = currentPlayer(state)
   const count = `Сделано ходов: ${state.history.length}`
 
@@ -126,8 +135,9 @@ function onlineLines(state, account) {
 // элементы.
 // p это сторона, которая сделала бы следующий ход, считается по длине history.
 // ai говорит, что партия идёт против ИИ: тогда вместо значка пишем "вы" или "ИИ".
-// online говорит, что на экране режим "По сети": тексты тогда берутся из onlineLines,
-// а account передаётся дальше только ей.
+// online говорит, что на экране режим "По сети", replay что идёт повтор партии: тексты
+// тогда берутся из onlineLines, а account передаётся дальше только ей. В повторе режим
+// партии 'pvp', поэтому одного online мало.
 function renderStatus(state, panel, account) {
   const turn = panel.querySelector('.turn')
   const moves = panel.querySelector('.moves')
@@ -140,8 +150,9 @@ function renderStatus(state, panel, account) {
   const p = currentPlayer(state)
   const ai = state.mode === 'ai'
   const online = state.mode === 'online'
+  const replay = Boolean(state.replay)
 
-  if (online) {
+  if (online || replay) {
     const [first, second] = onlineLines(state, account)
     turn.textContent = first
     moves.textContent = second
@@ -168,13 +179,15 @@ function renderStatus(state, panel, account) {
   // не закончена, потому что game.js не даёт вернуть ход в законченную партию.
   // По сети отменить ход в партии с человеком нельзя, а новую партию начинают кнопки
   // на левой панели, поэтому эти три кнопки выключены. Сдаться можно, пока партия идёт,
-  // то есть соперник пришёл и итога ещё нет.
-  undoButton.disabled = online || state.history.length === 0
-  redoButton.disabled = online || state.redo.length === 0 || state.outcome !== null
-  newButton.disabled = online
-  resignButton.disabled = online
-    ? !(state.online && state.online.o !== null && state.outcome === null)
-    : state.outcome !== null
+  // то есть соперник пришёл и итога ещё нет (playing). В повторе выключены все четыре
+  // кнопки: ходы листает полоса под полем.
+  const playing = Boolean(state.online && state.online.o !== null && state.outcome === null)
+  undoButton.disabled = online || replay || state.history.length === 0
+  redoButton.disabled = online || replay || state.redo.length === 0 || state.outcome !== null
+  newButton.disabled = online || replay
+  if (replay) resignButton.disabled = true
+  else if (online) resignButton.disabled = !playing
+  else resignButton.disabled = state.outcome !== null
 }
 
 // renderScore(state, record, panel) показывает счёт против ИИ для настроек этой партии.
@@ -235,6 +248,72 @@ function renderAccount(account, state, panel) {
   if (waiting) panel.querySelector('.invite-link').value = `${location.origin}/?game=${online.id}`
 }
 
+// RESULT_WORDS это итог партии словом для списка "Мои партии". Цвет точки дублируется
+// словом, потому что красный и зелёный легко спутать.
+const RESULT_WORDS = { playing: 'идёт', win: 'победа', loss: 'поражение', draw: 'ничья' }
+
+// renderProfile(profile, panel) показывает строку статистики и список "Мои партии" внутри
+// блока "Игра по сети" на левой панели, panel это .online-only. profile это ответ getProfile
+// или null, если игрок не вошёл: тогда всё очищается. Каждая партия это кнопка, поэтому до
+// неё можно дойти клавишей Tab и нажать Enter. В кнопке цветная точка, итог словом и описание
+// вида "3x3, K=3, против masha, ходов: 7, 15.11.2026". Число из game.created это время
+// в миллисекундах, браузер сам превращает его в дату. Никнейм соперника попадает на страницу
+// только через append и textContent, не через innerHTML. Номер партии кладём в data-id, по
+// нему main.js узнаёт, какую партию открыть.
+// dot это точка, button это кнопка партии, item это строка списка.
+function renderProfile(profile, panel) {
+  const stats = panel.querySelector('.stats')
+  const list = panel.querySelector('.my-games')
+  list.replaceChildren()
+
+  if (profile === null) {
+    stats.textContent = ''
+    return
+  }
+
+  stats.textContent = `Победы ${profile.wins}, ничьи ${profile.draws}, `
+    + `поражения ${profile.losses}, очки ${profile.points}`
+
+  for (const game of profile.games) {
+    const dot = document.createElement('span')
+    dot.className = `dot ${game.result}`
+
+    const date = new Date(game.created).toLocaleDateString('ru-RU')
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'game-item'
+    button.dataset.id = game.id
+    button.append(dot, `${RESULT_WORDS[game.result]}, ${game.N}x${game.N}, K=${game.K}, `
+      + `против ${game.opponent}, ходов: ${game.moves}, ${date}`)
+
+    const item = document.createElement('li')
+    item.append(button)
+    list.append(item)
+  }
+
+  if (profile.games.length === 0) {
+    const empty = document.createElement('li')
+    empty.textContent = 'Партий пока нет'
+    list.append(empty)
+  }
+}
+
+// renderReplay(state, bar) показывает или прячет полосу повтора под полем, bar это .replay.
+// Полоса видна, пока у партии есть state.replay. Счётчик пишет "Ход 3 из 9": сделанные
+// ходы лежат в history, ещё не показанные в redo, вместе это вся партия (total).
+// Кнопка проигрывания называется "Пуск" или "Пауза" по replay.playing. "Назад" выключена
+// в начале, "Вперёд" в конце.
+function renderReplay(state, bar) {
+  bar.hidden = !state.replay
+  if (!state.replay) return
+
+  const total = state.history.length + state.redo.length
+  bar.querySelector('.replay-step').textContent = `Ход ${state.history.length} из ${total}`
+  bar.querySelector('.btn-play').textContent = state.replay.playing ? 'Пауза' : 'Пуск'
+  bar.querySelector('.btn-back').disabled = state.history.length === 0
+  bar.querySelector('.btn-forward').disabled = state.redo.length === 0
+}
+
 // renderLeaderboard(rows, panel) рисует таблицу рейтинга в правой панели.
 // rows это список строк { nickname, wins, draws, losses, points } из getLeaderboard
 // или null, если сервер не ответил. Таблица строится заново целиком, строк не больше
@@ -263,4 +342,7 @@ function renderLeaderboard(rows, panel) {
   }
 }
 
-export { renderBoard, renderStatus, renderScore, renderAccount, renderLeaderboard, setCursor }
+export {
+  renderBoard, renderStatus, renderScore, renderAccount, renderProfile, renderReplay,
+  renderLeaderboard, setCursor,
+}

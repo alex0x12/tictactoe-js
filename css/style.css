@@ -83,10 +83,11 @@ body {
   font-size: 14px;
 }
 
-/* Поле */
+/* Поле. Колонкой, чтобы полоса повтора стояла под ним */
 .board-area {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
 }
 
 .board {
@@ -260,4 +261,96 @@ body {
   margin: 0;
   font-size: 13px;
   color: #5a6478;
+}
+
+/* Мои партии: список кнопок, у каждой цветная точка с итогом */
+.my-games {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+.online-only .game-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 4px 0 0;
+  text-align: left;
+}
+
+.dot {
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+}
+
+.dot.playing {
+  background: #2f6fed;
+  animation: blink 1s ease-in-out infinite;
+}
+
+.dot.win {
+  background: #2e9e4f;
+}
+
+.dot.loss {
+  background: #d64545;
+}
+
+.dot.draw {
+  background: #a3abba;
+}
+
+/* мигание: на середине секунды точка становится бледной, потом обратно */
+@keyframes blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* в системе включено "уменьшить движение": точка не мигает */
+@media (prefers-reduced-motion: reduce) {
+  .dot.playing {
+    animation: none;
+  }
+}
+
+/* Полоса повтора под полем */
+.replay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.replay button {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: #1c2230;
+  background: #fff;
+  border: 1px solid #c7cedb;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.replay button:hover:not(:disabled) {
+  background: #eef2fb;
+}
+
+.replay button:disabled {
+  color: #a3abba;
+  cursor: default;
+  opacity: 0.6;
+}
+
+.replay-step {
+  min-width: 6rem;
+  text-align: center;
+  font-size: 14px;
 }
