@@ -7,7 +7,7 @@ import { createGame, currentPlayer, isLegal, applyMove, resign, rebuild } from '
 import {
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
   insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
-  gamesOfUser, saveMoves, addResult, leaderboard,
+  gamesOfUser, saveMoves, expiredGames, addResult, leaderboard,
 } from './db.js'
 
 // app.js собирает приложение Express: раздаёт страницу и отвечает на адреса API.
@@ -19,6 +19,9 @@ const root = join(import.meta.dirname, '..')
 
 // NICKNAME это правило для никнейма: от 3 до 20 латинских букв, цифр или _
 const NICKNAME = /^[A-Za-z0-9_]{3,20}$/
+
+// MOVE_TIME это время на один ход в миллисекундах, 30 секунд. Одно для всех полей.
+const MOVE_TIME = 30 * 1000
 
 // fail(res, status, error) отвечает ошибкой: код status и тело { error }. Страница
 // показывает текст error как есть. Все ожидаемые ошибки идут через неё, тексты в спеке.
@@ -35,11 +38,13 @@ function resultFor(row, userId) {
   return row.winner_id === userId ? 'win' : 'loss'
 }
 
-// gameView(row, userId) превращает строку партии из базы (результат findGame) в объект
+// gameView(row, userId, now) превращает строку партии из базы (результат findGame) в объект
 // для ответа, как в спеке. В базе лежат id игроков, 1 и 0 и история текстом, а страница
 // получает никнеймы, true и false и массив. you это сторона того, кто спрашивает:
-// 1 крестик, 2 нолик, userId это его id.
-function gameView(row, userId) {
+// 1 крестик, 2 нолик, userId это его id. now это время на сервере в миллисекундах:
+// timeLeft это сколько осталось на текущий ход у того, чья очередь. Пока соперника нет
+// и после конца партии время не идёт, и timeLeft равен null.
+function gameView(row, userId, now) {
   return {
     id: row.id,
     N: row.N,
@@ -51,13 +56,19 @@ function gameView(row, userId) {
     history: JSON.parse(row.history),
     outcome: row.outcome,
     winner: row.winner_name ?? null,
+    timeLeft: row.outcome === null && row.o_id !== null
+      ? Math.max(0, row.turn_started_at + MOVE_TIME - now)
+      : null,
   }
 }
 
-// createApp(db) возвращает приложение Express. База приходит параметром, а не открывается
-// тут, чтобы тесты могли подставить базу в памяти. Запускают приложение через .listen(port),
-// это делает index.js. Адреса регистрируются по порядку, обработчик ошибок идёт последним.
-function createApp(db) {
+// createApp(db, { clock }) возвращает приложение Express. База приходит параметром, а не
+// открывается тут, чтобы тесты могли подставить базу в памяти. Часы приходят так же:
+// clock это функция, которая возвращает текущее время в миллисекундах, по умолчанию Date.now.
+// Таймер хода берёт время только из clock, поэтому тесты подставляют свои часы и сдвигают
+// их на 30 секунд мгновенно. Запускают приложение через .listen(port), это делает index.js.
+// Адреса регистрируются по порядку, обработчик ошибок идёт последним.
+function createApp(db, { clock = Date.now } = {}) {
   const app = express()
 
   // express.json() разбирает тело запроса из JSON в req.body
@@ -79,6 +90,28 @@ function createApp(db) {
   // выше и досюда не доходят, поэтому кэшировать их браузер по-прежнему может
   app.use((req, res, next) => {
     res.set('Cache-Control', 'no-store')
+    next()
+  })
+
+  // таймер хода: на каждый ход 30 секунд, и кто не успел, проигрывает. Фоновых часов у
+  // сервера нет, поэтому перед каждым запросом к API он заканчивает все партии с вышедшим
+  // временем (expiredGames). Чей ход, считается по длине истории: чётная значит крестик,
+  // нечётная нолик. Победитель его соперник, счётчики растут так же, как при сдаче. Решают
+  // часы сервера: ход, который дошёл позже тридцатой секунды, уже не примется, потому что
+  // партию закончит этот посредник раньше. Если оба игрока закрыли вкладки, партию
+  // закончит любой следующий запрос любого игрока, например открытый рейтинг. turn_started_at
+  // при записи остаётся прежним: после конца партии таймер больше не нужен.
+  // row это просроченная партия, xToMove говорит, что время вышло у крестика.
+  app.use((req, res, next) => {
+    for (const row of expiredGames(db, clock() - MOVE_TIME)) {
+      const history = JSON.parse(row.history)
+      const xToMove = history.length % 2 === 0
+      const winnerId = xToMove ? row.o_id : row.x_id
+      const loserId = xToMove ? row.x_id : row.o_id
+      saveMoves(db, row.id, history, 'timeout', winnerId, row.turn_started_at)
+      addResult(db, winnerId, 'win')
+      addResult(db, loserId, 'loss')
+    }
     next()
   })
 
@@ -159,15 +192,15 @@ function createApp(db) {
     if (invite !== true) {
       const waiting = findWaitingGame(db, N, K)
       if (waiting) {
-        setOpponent(db, waiting.id, me)
-        return res.status(201).json(gameView(findGame(db, waiting.id), me))
+        setOpponent(db, waiting.id, me, clock())
+        return res.status(201).json(gameView(findGame(db, waiting.id), me, clock()))
       }
     }
 
     // 6 случайных байт дают 12 символов, угадать чужой id нельзя
     const id = randomBytes(6).toString('hex')
     insertGame(db, { id, N, K, xId: me, invite: invite === true })
-    res.status(201).json(gameView(findGame(db, id), me))
+    res.status(201).json(gameView(findGame(db, id), me, clock()))
   })
 
   // POST /games/:id/join это вход по пригласительной ссылке. Если игрок уже в партии
@@ -181,11 +214,11 @@ function createApp(db) {
     if (!row) return fail(res, 404, 'Партия не найдена')
 
     const me = req.user.id
-    if (row.x_id === me || row.o_id === me) return res.json(gameView(row, me))
+    if (row.x_id === me || row.o_id === me) return res.json(gameView(row, me, clock()))
     if (row.o_id !== null) return fail(res, 409, 'В партии уже два игрока')
 
-    setOpponent(db, row.id, me)
-    res.json(gameView(findGame(db, row.id), me))
+    setOpponent(db, row.id, me, clock())
+    res.json(gameView(findGame(db, row.id), me, clock()))
   })
 
   // GET /games/:id отдаёт партию. Видят её только два игрока, зрителей нет.
@@ -196,7 +229,7 @@ function createApp(db) {
 
     const me = req.user.id
     if (row.x_id !== me && row.o_id !== me) return fail(res, 403, 'Это не ваша партия')
-    res.json(gameView(row, me))
+    res.json(gameView(row, me, clock()))
   })
 
   // POST /games/:id/move делает ход или принимает сдачу. Проверки идут строго в этом порядке,
@@ -236,7 +269,7 @@ function createApp(db) {
       if (state.outcome === 'win') winnerId = me
     }
 
-    saveMoves(db, row.id, state.history, state.outcome, winnerId)
+    saveMoves(db, row.id, state.history, state.outcome, winnerId, clock())
 
     // счётчики меняются ровно один раз: после конца партии сюда уже не попасть,
     // проверка outcome выше не пропустит
@@ -248,7 +281,7 @@ function createApp(db) {
       addResult(db, winnerId === me ? opponentId : me, 'loss')
     }
 
-    res.json(gameView(findGame(db, row.id), me))
+    res.json(gameView(findGame(db, row.id), me, clock()))
   })
 
   // GET /leaderboard это общий рейтинг, токен не нужен: таблицу видно и до входа

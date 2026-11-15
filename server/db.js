@@ -16,8 +16,11 @@ import { DatabaseSync } from 'node:sqlite'
 //   invite это 1 для партии по приглашению и 0 для случайного соперника;
 //   history это ходы JSON-текстом, например [4,0,8]. Как и в браузере, доска и очередь хода
 //     получаются из истории;
-//   outcome это null, 'win', 'draw' или 'resign', winner_id пуст при ничьей и в идущей партии;
-//   created_at это Date.now() в миллисекундах, по нему список партий идёт от новых к старым.
+//   outcome это null, 'win', 'draw', 'resign' или 'timeout' (проигрыш по времени), winner_id
+//     пуст при ничьей и в идущей партии;
+//   created_at это Date.now() в миллисекундах, по нему список партий идёт от новых к старым;
+//   turn_started_at это когда начался текущий ход, в миллисекундах: когда пришёл соперник
+//     или когда сделан последний ход. По нему считается таймер хода, см. app.js.
 // Состояние партии отдельным полем не хранится, его видно по двум полям: o_id пуст значит
 // партия ждёт соперника, o_id есть и outcome пуст значит идёт, outcome есть значит закончена.
 // Очки рейтинга тоже не хранятся, запрос считает их как wins * 3 + draws.
@@ -46,7 +49,8 @@ CREATE TABLE IF NOT EXISTS games (
   history    TEXT NOT NULL DEFAULT '[]',
   outcome    TEXT,
   winner_id  INTEGER REFERENCES users(id),
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  turn_started_at INTEGER
 );
 `
 
@@ -59,6 +63,16 @@ function openDb(file) {
   const db = new DatabaseSync(file)
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(SCHEMA)
+
+  // CREATE TABLE IF NOT EXISTS уже существующую таблицу не меняет, поэтому в базе, созданной
+  // до таймера, столбца turn_started_at нет. Добавляем его отдельно, если его нет. Время
+  // сюда не передаётся, поэтому Date.now(): у идущих партий таймер начинается с запуска сервера
+  const columns = db.prepare('PRAGMA table_info(games)').all().map((c) => c.name)
+  if (!columns.includes('turn_started_at')) {
+    db.exec('ALTER TABLE games ADD COLUMN turn_started_at INTEGER')
+    db.prepare('UPDATE games SET turn_started_at = ? WHERE outcome IS NULL AND o_id IS NOT NULL')
+      .run(Date.now())
+  }
   return db
 }
 
@@ -144,9 +158,10 @@ function deleteWaitingGames(db, userId) {
   db.prepare('DELETE FROM games WHERE x_id = ? AND o_id IS NULL').run(userId)
 }
 
-// setOpponent(db, id, userId) сажает игрока userId на место нолика в партии id.
-function setOpponent(db, id, userId) {
-  db.prepare('UPDATE games SET o_id = ? WHERE id = ?').run(userId, id)
+// setOpponent(db, id, userId, at) сажает игрока userId на место нолика в партии id.
+// at это время в миллисекундах: с него начинается отсчёт первого хода.
+function setOpponent(db, id, userId, at) {
+  db.prepare('UPDATE games SET o_id = ?, turn_started_at = ? WHERE id = ?').run(userId, at, id)
 }
 
 // gamesOfUser(db, userId) возвращает до 20 партий игрока от новых к старым, в том же виде,
@@ -160,12 +175,22 @@ function gamesOfUser(db, userId) {
     LIMIT 20`).all(userId, userId)
 }
 
-// saveMoves(db, id, history, outcome, winnerId) записывает ходы и итог партии id.
-// history приходит массивом, в базу уходит JSON-текстом. outcome это null, 'win', 'draw'
-// или 'resign', winnerId это id победителя или null.
-function saveMoves(db, id, history, outcome, winnerId) {
-  db.prepare('UPDATE games SET history = ?, outcome = ?, winner_id = ? WHERE id = ?')
-    .run(JSON.stringify(history), outcome, winnerId, id)
+// saveMoves(db, id, history, outcome, winnerId, at) записывает ходы и итог партии id.
+// history приходит массивом, в базу уходит JSON-текстом. outcome это null, 'win', 'draw',
+// 'resign' или 'timeout', winnerId это id победителя или null. at это время хода
+// в миллисекундах, с него начинается отсчёт хода соперника.
+function saveMoves(db, id, history, outcome, winnerId, at) {
+  db.prepare(`UPDATE games SET history = ?, outcome = ?, winner_id = ?, turn_started_at = ?
+    WHERE id = ?`).run(JSON.stringify(history), outcome, winnerId, at, id)
+}
+
+// expiredGames(db, before) возвращает идущие партии, где ход начался не позже момента before:
+// это строки games, у которых нет итога, есть соперник и вышло время хода. app.js зовёт
+// её перед каждым запросом и заканчивает найденные партии.
+function expiredGames(db, before) {
+  return db.prepare(`
+    SELECT * FROM games
+    WHERE outcome IS NULL AND o_id IS NOT NULL AND turn_started_at <= ?`).all(before)
 }
 
 // ADD_RESULT это готовый запрос на каждый итог. Имя столбца нельзя передать через ?,
@@ -203,5 +228,5 @@ export {
   openDb,
   createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
   insertGame, findGame, findWaitingGame, deleteWaitingGames, setOpponent,
-  gamesOfUser, saveMoves, addResult, leaderboard,
+  gamesOfUser, saveMoves, expiredGames, addResult, leaderboard,
 }

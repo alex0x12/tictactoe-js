@@ -1,16 +1,24 @@
 import { test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { openDb } from '../server/db.js'
 import { createApp } from '../server/app.js'
 
 // Каждый тест поднимает сервер на свободном порту с чистой базой в памяти
 // и шлёт ему настоящие HTTP-запросы через fetch.
+// now это время на сервере. Часы в тестах стоят, пока тест сам не сдвинет now:
+// так тридцатисекундный таймер хода проверяется мгновенно
 let server
 let base
+let now
 
 beforeEach(async () => {
-  server = createApp(openDb(':memory:')).listen(0)
+  now = Date.UTC(2026, 10, 15, 12, 0, 0)
+  server = createApp(openDb(':memory:'), { clock: () => now }).listen(0)
   await once(server, 'listening')
   base = `http://127.0.0.1:${server.address().port}`
 })
@@ -182,7 +190,7 @@ test('случайный соперник: второй игрок попада�
   assert.match(a.body.id, /^[0-9a-f]{12}$/)
   assert.deepEqual(a.body, {
     id: a.body.id, N: 3, K: 3, invite: false, x: 'alex', o: null, you: 1,
-    history: [], outcome: null, winner: null,
+    history: [], outcome: null, winner: null, timeLeft: null,
   })
 
   const m = await call('POST', '/games', { N: 3, K: 3 }, masha)
@@ -453,4 +461,122 @@ test('ответы API помечены no-store, а страница и скр�
     const res = await fetch(base + path)
     assert.notEqual(res.headers.get('cache-control'), 'no-store', path)
   }
+})
+
+// --- таймер хода ---
+
+test('после прихода соперника на ход 30 секунд, время убывает', async () => {
+  const alex = await signUp('alex')
+  const masha = await signUp('masha')
+  const waiting = await call('POST', '/games', { N: 3, K: 3 }, alex)
+  assert.equal(waiting.body.timeLeft, null)
+
+  const joined = await call('POST', '/games', { N: 3, K: 3 }, masha)
+  assert.equal(joined.body.timeLeft, 30000)
+
+  now += 12000
+  const later = await call('GET', `/games/${joined.body.id}`, undefined, alex)
+  assert.equal(later.body.timeLeft, 18000)
+})
+
+test('кто не сходил за 30 секунд, проигрывает по времени', async () => {
+  const { alex, masha, id } = await startPair()
+  now += 30001
+  const res = await call('GET', `/games/${id}`, undefined, masha)
+  assert.equal(res.body.outcome, 'timeout')
+  assert.equal(res.body.winner, 'masha')
+  assert.equal(res.body.timeLeft, null)
+
+  const late = await move(alex, id, 4)
+  assert.equal(late.status, 409)
+  assert.deepEqual(late.body, { error: 'Партия уже закончена' })
+
+  const board = await call('GET', '/leaderboard')
+  assert.deepEqual(board.body.map((r) => [r.nickname, r.wins, r.losses]), [
+    ['masha', 1, 0],
+    ['alex', 0, 1],
+  ])
+})
+
+test('ход перезапускает таймер, время идёт у того, чья очередь', async () => {
+  const { alex, id } = await startPair()
+  now += 29999
+  const first = await move(alex, id, 4)
+  assert.equal(first.status, 200)
+  assert.equal(first.body.timeLeft, 30000)
+
+  now += 25000
+  const mid = await call('GET', `/games/${id}`, undefined, alex)
+  assert.equal(mid.body.outcome, null)
+  assert.equal(mid.body.timeLeft, 5000)
+
+  now += 5001
+  const end = await call('GET', `/games/${id}`, undefined, alex)
+  assert.equal(end.body.outcome, 'timeout')
+  assert.equal(end.body.winner, 'alex')
+  assert.deepEqual(end.body.history, [4])
+})
+
+test('ждущая партия по времени не заканчивается', async () => {
+  const alex = await signUp('alex')
+  const { body: { id } } = await call('POST', '/games', { N: 3, K: 3, invite: true }, alex)
+  now += 100000
+  const res = await call('GET', `/games/${id}`, undefined, alex)
+  assert.equal(res.body.outcome, null)
+  assert.equal(res.body.timeLeft, null)
+})
+
+test('законченная партия по времени не меняется', async () => {
+  const { alex, masha, id } = await startPair()
+  for (const [token, cell] of [[alex, 0], [masha, 3], [alex, 1], [masha, 4], [alex, 2]]) {
+    await move(token, id, cell)
+  }
+  now += 100000
+  const res = await call('GET', `/games/${id}`, undefined, masha)
+  assert.equal(res.body.outcome, 'win')
+  assert.equal(res.body.winner, 'alex')
+
+  const board = await call('GET', '/leaderboard')
+  assert.deepEqual(board.body.map((r) => [r.nickname, r.wins, r.losses]), [
+    ['alex', 1, 0],
+    ['masha', 0, 1],
+  ])
+})
+
+test('просроченную партию заканчивает любой запрос к API', async () => {
+  const { alex } = await startPair()
+  now += 31000
+  const board = await call('GET', '/leaderboard')
+  assert.deepEqual(board.body.map((r) => [r.nickname, r.wins, r.losses]), [
+    ['masha', 1, 0],
+    ['alex', 0, 1],
+  ])
+
+  const profile = await call('GET', '/profile', undefined, alex)
+  assert.deepEqual(profile.body.games.map((g) => g.result), ['loss'])
+})
+
+test('старая база без turn_started_at получает столбец, идущие партии получают время', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ttt-'))
+  const file = join(dir, 'old.db')
+
+  // таблица games, какой она была до таймера
+  const old = new DatabaseSync(file)
+  old.exec(`CREATE TABLE games (
+    id TEXT PRIMARY KEY, N INTEGER NOT NULL, K INTEGER NOT NULL,
+    x_id INTEGER NOT NULL, o_id INTEGER, invite INTEGER NOT NULL,
+    history TEXT NOT NULL DEFAULT '[]', outcome TEXT, winner_id INTEGER,
+    created_at INTEGER NOT NULL)`)
+  old.exec(`INSERT INTO games (id, N, K, x_id, o_id, invite, created_at)
+    VALUES ('aaaaaaaaaaaa', 3, 3, 1, 2, 0, 1)`)
+  old.exec(`INSERT INTO games (id, N, K, x_id, invite, created_at)
+    VALUES ('bbbbbbbbbbbb', 3, 3, 1, 0, 1)`)
+  old.close()
+
+  const db = openDb(file)
+  const rows = db.prepare('SELECT id, turn_started_at FROM games ORDER BY id').all()
+  assert.equal(typeof rows[0].turn_started_at, 'number')
+  assert.equal(rows[1].turn_started_at, null)
+  db.close()
+  rmSync(dir, { recursive: true })
 })
