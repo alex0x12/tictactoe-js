@@ -62,4 +62,45 @@ function openDb(file) {
   return db
 }
 
-export { openDb }
+// --- игроки и токены ---
+
+// createUser(db, nickname, passwordHash) записывает нового игрока и возвращает его id.
+// passwordHash это строка "соль:хеш" из auth.js. lastInsertRowid может прийти как BigInt,
+// поэтому приводим к обычному числу. Если никнейм занят, база бросит ошибку, но app.js
+// проверяет это раньше через findUserByNickname.
+function createUser(db, nickname, passwordHash) {
+  const result = db.prepare('INSERT INTO users (nickname, password) VALUES (?, ?)')
+    .run(nickname, passwordHash)
+  return Number(result.lastInsertRowid)
+}
+
+// findUserByNickname(db, nickname) возвращает строку игрока из users или undefined.
+// Сравнение идёт без учёта регистра: так объявлен столбец.
+function findUserByNickname(db, nickname) {
+  return db.prepare('SELECT * FROM users WHERE nickname = ?').get(nickname)
+}
+
+// findUserByToken(db, token) возвращает строку игрока, которому выдан токен, или undefined.
+// Так сервер узнаёт, кто прислал запрос. Зовётся из requireUser в app.js.
+function findUserByToken(db, token) {
+  return db.prepare(`
+    SELECT users.* FROM tokens
+    JOIN users ON users.id = tokens.user_id
+    WHERE tokens.token = ?`).get(token)
+}
+
+// saveToken(db, token, userId) запоминает выданный токен и его владельца.
+function saveToken(db, token, userId) {
+  db.prepare('INSERT INTO tokens (token, user_id) VALUES (?, ?)').run(token, userId)
+}
+
+// deleteToken(db, token) забывает токен. Остальные токены игрока остаются, поэтому выход
+// на одном компьютере не выбрасывает его с другого.
+function deleteToken(db, token) {
+  db.prepare('DELETE FROM tokens WHERE token = ?').run(token)
+}
+
+export {
+  openDb,
+  createUser, findUserByNickname, findUserByToken, saveToken, deleteToken,
+}
